@@ -1,0 +1,28 @@
+# Tests on Linux and macOS: the FUSE mount (odi run NAME) only compiles on Linux.
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "clippy, rustfmt", targets: wasm32-unknown-unknown }
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo fmt --check
+      # The command reference is made from odi's help: it must match.
+      - run: sh docs/gen-cli.sh && git diff --exit-code docs/cli.md
+      - run: sh -n install.sh
+      # The browser runner's reader alone: pure Rust (ruzstd), as in a tab.
+      - run: cargo test -p odi-web
+      - run: cargo clippy -p odi-web --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo build -p odi-web --release --target wasm32-unknown-unknown
+      # The WebGPU example's game core (its own crate, WebAssembly only).
+      - run: cargo clippy --release --target wasm32-unknown-unknown --manifest-path examples/starseed/core/Cargo.toml -- -D warnings

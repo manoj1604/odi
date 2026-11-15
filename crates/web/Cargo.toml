@@ -1,0 +1,16 @@
+[package]
+name = "odi-web"
+description = "ODI files in a browser: the checks a reader makes, compiled to WebAssembly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+odi-format = { path = "../format", default-features = false, features = ["pure"] }
+serde_json = "1"
+hex = "0.4"

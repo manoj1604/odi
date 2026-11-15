@@ -1,0 +1,26 @@
+[package]
+name = "odi-format"
+description = "Read and write ODI files: one file for a program's build output (the ODI format, 0.1 and the 0.2 draft)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["odi", "file-format", "packaging", "archive"]
+categories = ["encoding", "parser-implementations"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+zstd = { version = "0.13", default-features = false, optional = true }
+ruzstd = { version = "0.8", optional = true }
+ed25519-dalek = "2"
+
+[features]
+# zstd (C, fast): reads and writes. Without it, "pure" reads only, in pure Rust
+# (for WebAssembly: the browser runner).
+default = ["zstd"]
+pure = ["dep:ruzstd"]

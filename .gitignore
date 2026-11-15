@@ -1,0 +1,5 @@
+*.odi
+/odi
+target/
+!crates/web/tests/fixture.odi
+.DS_Store

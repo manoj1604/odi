@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ODI Runner</title>
+<style>
+  :root { --bg: #f6f6f4; --fg: #1d1d1b; --dim: #6b6b66; --line: #ddddd8; --ok: #1f7a3a; --bad: #b3261e; --btn: #e9e9e5; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ececea; --dim: #9a9a94; --line: #2c2c2a; --ok: #5cc27a; --bad: #f2827a; --btn: #262624; } }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+  header b { font-weight: 600; }
+  header span { color: var(--dim); }
+  header a { color: inherit; text-decoration: none; }
+  code { font: 12px ui-monospace, monospace; }
+  .ok { color: var(--ok) !important; } .bad { color: var(--bad) !important; }
+  button, .pick { font: inherit; color: var(--fg); background: var(--btn); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #keep { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  iframe { flex: 1; border: 0; width: 100%; background: #000; }
+  main { padding: 16px; max-width: 680px; }
+  #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 28px 16px; text-align: center; margin: 16px 0; }
+  #drop.over { border-color: var(--ok); }
+  #drop input { display: none; }
+  ul { padding-left: 18px; }
+  li { margin: 4px 0; }
+  li a { color: inherit; }
+</style>
+</head>
+<body>
+<header id="bar"><a href="./"><b>ODI</b></a><span id="what">starting…</span><span id="timing"></span><span id="keep"></span></header>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const t0 = performance.now();
+const ms = () => Math.round(performance.now() - t0) + " ms";
+const kb = (n) => n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + " MB" : (n / 1024).toFixed(1) + " KB";
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const q = new URLSearchParams(location.search);
+const timings = [];
+const note = (s) => { timings.push(s); $("timing").textContent = timings.join(" · "); console.log("[odi] " + s); };
+
+// A question for the service worker; onEach sees every answer (save's
+// progress), the promise the last one.
+async function ask(msg, onEach) {
+  const ch = new MessageChannel();
+  const answer = new Promise((resolve) => (ch.port1.onmessage = (e) => {
+    if (onEach) onEach(e.data);
+    if (!onEach || e.data.done || e.data.ok === false) resolve(e.data);
+  }));
+  navigator.serviceWorker.controller.postMessage(msg, [ch.port2]);
+  return answer;
+}
+
+async function worker() {
+  if (!navigator.serviceWorker) throw new Error("this browser has no service workers (or this isn't https or localhost)");
+  const reg = await navigator.serviceWorker.register("sw.js", { scope: "./", updateViaCache: "none" });
+  reg.update().catch(() => {});
+  if (!navigator.serviceWorker.controller) {
+    await new Promise((r) => navigator.serviceWorker.addEventListener("controllerchange", r, { once: true }));
+  }
+}
+
+// A file from this machine: kept here whole, then run like any other.
+async function pick(file) {
+  const src = new URL("odi-store/local/" + encodeURIComponent(`${file.size}-${file.lastModified}-${file.name}`), location).href;
+  const c = await caches.open("odi-local-v1");
+  await c.put(src, new Response(file, { headers: { "Content-Type": "application/vnd.odi.v0", "Content-Length": String(file.size) } }));
+  location.search = "?src=" + encodeURIComponent(src);
+}
+
+async function landing() {
+  $("what").textContent = "no file given";
+  document.body.insertAdjacentHTML("beforeend", `<main>
+    <p>Runs an ODI file of a browser app (its <code>static/</code> files) in this tab, fetching only what the app asks for, every byte checked.
+    Open <code>?src=URL-of-an-ODI-file</code>, run <code>odi web FILE</code>, or pick a file here.</p>
+    <label id="drop"><input type="file" id="file" accept=".odi">Drop an <code>.odi</code> file here, or <span class="pick">pick one</span><br>
+      <small>(read on this machine: nothing is uploaded)</small></label>
+    <div id="kept"></div></main>`);
+  const drop = $("drop");
+  $("file").addEventListener("change", (e) => e.target.files[0] && pick(e.target.files[0]));
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); e.dataTransfer.files[0] && pick(e.dataTransfer.files[0]); });
+  await worker();
+  const k = await ask({ type: "kept" });
+  if (k.ok && k.list.length) {
+    $("kept").innerHTML = "<p>Opened here before (these open with no network once kept):</p><ul>" + k.list.map((f) =>
+      `<li><a href="?src=${encodeURIComponent(f.src)}">${esc(f.name)} ${esc(f.version)}</a> <code>${esc(f.digest.slice(0, 19))}</code> ${kb(f.size)}${f.local ? " · from this machine" : ""}</li>`).join("") + "</ul>";
+  }
+}
+
+// How much is kept for offline, and a button to keep the rest.
+async function keeper(key) {
+  const box = $("keep");
+  const show = (s) => {
+    const all = s.total > 0 && s.have >= s.total;
+    box.innerHTML = all
+      ? `<span class="ok">kept for offline (${kb(s.total)})</span>`
+      : `<span>${s.total ? Math.floor(100 * s.have / s.total) : 0}% kept</span><button id="save">Save for offline</button>`;
+    if (!all) $("save").onclick = save;
+  };
+  async function save() {
+    $("save").disabled = true;
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    const t = performance.now();
+    const r = await ask({ type: "save", key }, (m) => {
+      if (m.progress) $("save").textContent = `saving… ${m.progress}/${m.of}`;
+    });
+    if (!r.ok) { box.innerHTML = `<span class="bad">${esc(r.error)}</span>`; return; }
+    note(`saved for offline in ${Math.round(performance.now() - t)} ms`);
+    show(r);
+  }
+  const s = await ask({ type: "status", key });
+  if (s.ok) show(s);
+}
+
+async function main() {
+  const src = q.get("src");
+  if (!src) return landing();
+  await worker();
+  const key = btoa(JSON.stringify({ src: new URL(src, location).href, parts: new URL(q.get("parts") || "parts/", location).href }))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const a = await ask({ type: "open", key });
+  if (!a.ok) throw new Error(a.error);
+  const signed = a.signatures.map((s) => `<span class="${s.valid ? "ok" : "bad"}">signed ${esc(s.key.slice(0, 20))}…${s.valid ? "" : " (doesn't match!)"}</span>`).join(" ");
+  const parts = a.parts.map((p) => `${esc(p.as || "part")} ${esc(p.name)}`).join(", ");
+  $("what").innerHTML = `<b>${esc(a.name)}</b> ${esc(a.version)} <code>${esc(a.digest.slice(0, 19))}</code> ${signed} ${parts ? "· " + parts : ""}${a.replaced.length ? ` · ${a.replaced.length} files replaced` : ""}${a.offline ? ' · <span class="ok">offline: as kept</span>' : ""}`;
+  note(`opened in ${ms()} (${kb(a.stats.bytes)} in ${a.stats.requests} requests)`);
+  const frame = document.createElement("iframe");
+  frame.allow = "autoplay; fullscreen; gamepad; cross-origin-isolated";
+  frame.addEventListener("load", async () => {
+    const s = await ask({ type: "stats" });
+    note(`page in ${ms()} · fetched ${kb(s.bytes)} of ${kb(a.size)} in ${s.requests} requests${s.stored ? `, ${kb(s.stored)} as kept` : ""}`);
+    keeper(key);
+  }, { once: true });
+  window.addEventListener("message", async (e) => {
+    if (e.source === frame.contentWindow && e.data && e.data.odi === "ready") {
+      const s = await ask({ type: "stats" });
+      note(`${e.data.what || "ready"} in ${ms()} (${kb(s.bytes)} fetched${s.stored ? `, ${kb(s.stored)} as kept` : ""})`);
+      if (/music/.test(e.data.what || "")) keeper(key);
+    }
+  });
+  frame.src = `run/${key}/`;
+  document.body.appendChild(frame);
+}
+main().catch((e) => { $("what").innerHTML = `<span class="bad">${esc(e.message)}</span>`; console.error(e); });
+</script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+# Built on a Mac, run on Linux: a Next.js app with image resizing (compiled
+# code: sharp), built by odi on macOS for linux/amd64, then run on Linux.
+# Started by hand (gh workflow run cross-node.yml).
+name: cross node
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cargo build --release && cp target/release/odi odi-bin
+      - name: A Next.js app with an image to resize
+        run: |
+          mkdir -p t/app t/public && cd t
+          echo '{"name":"cross-next","version":"1.0.0","private":true,"scripts":{"build":"next build"},"dependencies":{"next":"15.5.4","react":"19.1.1","react-dom":"19.1.1","sharp":"0.34.4"}}' > package.json
+          echo 'module.exports = { output: "standalone" };' > next.config.js
+          echo 'export default function L({ children }) { return <html><body>{children}</body></html>; }' > app/layout.js
+          echo 'import Image from "next/image"; export default function P() { return <main><h1>cross build</h1><Image src="/photo.png" width={64} height={64} alt="x" /></main>; }' > app/page.js
+          python3 -c "import zlib,struct;w,h=800,600;raw=b''.join(b'\0'+bytes((x*255//w,y*255//h,128)[i] for x in range(w) for i in range(3)) for y in range(h));c=lambda t,d:struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d));open('public/photo.png','wb').write(b'\x89PNG\r\n\x1a\n'+c(b'IHDR',struct.pack('>IIBBBBB',w,h,8,2,0,0,0))+c(b'IDAT',zlib.compress(raw))+c(b'IEND',b''))"
+          npm install --no-audit --no-fund
+          ../odi-bin build --platform linux/amd64 -o ../app.odi
+          ../odi-bin inspect ../app.odi
+      - uses: actions/upload-artifact@v4
+        with: { name: built, path: app.odi }
+  run:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # (odi itself is built here, for this machine: the Mac job builds the app.)
+      - run: cargo build --release && cp target/release/odi odi-linux
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/download-artifact@v4
+        with: { name: built }
+      - name: Run it, and resize an image
+        run: |
+          uname -m
+          ./odi-linux run app.odi --port 8200 > run.log 2>&1 &
+          sleep 6
+          curl -fs localhost:8200/ | grep -q "cross build"
+          curl -fs -o small.img -H "accept: image/webp" "http://localhost:8200/_next/image?url=%2Fphoto.png&w=64&q=75"
+          head -c 12 small.img | grep -q WEBP
+          ls -l small.img
+          cat run.log
