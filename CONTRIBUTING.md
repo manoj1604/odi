@@ -16,6 +16,19 @@ welcome.
 - **Security problems:** please don't open a public issue; see
   [SECURITY.md](SECURITY.md).
 
+## Where things are
+
+- [`crates/format`](crates/format) (`odi-format`): the Rust library that
+  reads and writes ODI files, with every check a reader must make.
+- [`crates/odi`](crates/odi): the `odi` command.
+- [`crates/web`](crates/web) and [`web/`](web): the browser runner (the
+  reader compiled to WebAssembly, plus a page and service worker).
+- [`examples/starseed`](examples/starseed): a small WebGPU game packed in
+  one ODI file.
+- [`tests/`](tests): end-to-end tests; [`bench/`](bench): timing runs and
+  a mock registry.
+- [`docs/`](docs): user docs; [`SPEC.md`](SPEC.md): the format.
+
 ## Building and testing
 
 You need a recent stable Rust. Then:
