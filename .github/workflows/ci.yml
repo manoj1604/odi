@@ -20,6 +20,8 @@ jobs:
       # The command reference is made from odi's help: it must match.
       - run: sh docs/gen-cli.sh && git diff --exit-code docs/cli.md
       - run: sh -n install.sh
+      # The hub workflow end to end, against the mock hub.
+      - run: tests/hub.sh
       # The browser runner's reader alone: pure Rust (ruzstd), as in a tab.
       - run: cargo test -p odi-web
       - run: cargo clippy -p odi-web --target wasm32-unknown-unknown -- -D warnings

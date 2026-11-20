@@ -90,9 +90,10 @@ odi exec tool.odi -- --input report.csv
 
 ```sh
 odi login                       # asks for a token
-odi push acme/shop:1.0          # only what the registry doesn't have is sent
-odi pull acme/shop:1.0          # the build for this machine, checked
-odi run acme/shop:1.0           # run it straight from the registry
+odi push acme/shop:1.0.0        # only what the registry doesn't have is sent
+odi push acme/shop --bump patch # later: 1.0.1, and latest moves to it
+odi pull acme/shop:1.0          # the newest 1.0.x, for this machine, checked
+odi run acme/shop               # latest, straight from the registry
 ```
 
 On Linux, `odi run NAME` mounts the file and reads it as the program asks
@@ -105,8 +106,8 @@ odi push acme/shop:1.0 shop.odi
 ```
 
 The registry then sends all of that in one request. See
-[registries](registry.md) for more, including `odi fill` for hosts that
-know what they'll run.
+[publishing on the hub](hub.md) for versions, ranges, rolling back and CI,
+and [registries](registry.md) for `odi fill` and the protocol.
 
 ## Next
 

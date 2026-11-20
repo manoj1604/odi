@@ -10,7 +10,9 @@ mod hub;
 mod keys;
 mod mount;
 mod parts;
+mod publish;
 mod run;
+mod versions;
 mod web;
 
 use std::fs;
@@ -67,9 +69,13 @@ fn main() {
         "extract" => cmd_extract(rest),
         "login" => hub::cmd_login(rest),
         "logout" => hub::cmd_logout(),
-        "push" => hub::cmd_push(rest),
+        "push" => publish::cmd_push(rest),
+        "versions" | "tags" => publish::cmd_versions(rest),
+        "tag" => publish::cmd_tag(rest),
+        "diff" => publish::cmd_diff(rest),
+        "search" => publish::cmd_search(rest),
+        "repos" => publish::cmd_repos(rest),
         "pull" => hub::cmd_pull(rest),
-        "tags" => hub::cmd_tags(rest),
         "rm" => hub::cmd_rm(rest),
         "usage" => hub::cmd_usage(rest),
         "version" | "--version" | "-V" => {

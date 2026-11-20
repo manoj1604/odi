@@ -449,7 +449,11 @@ impl Project {
     /// (objects merged, the rest replaced; null removes).
     fn overrides(&mut self) -> Result<()> {
         let Ok(b) = fs::read(self.dir.join("odi.json")) else { return Ok(()) };
-        let over: Value = serde_json::from_slice(&b).context("odi.json")?;
+        let mut over: Value = serde_json::from_slice(&b).context("odi.json")?;
+        // ("repo" is where odi push publishes, not part of the manifest.)
+        if let Value::Object(o) = &mut over {
+            o.remove("repo");
+        }
         let mut cur = serde_json::to_value(&self.m)?;
         merge(&mut cur, over);
         self.m = serde_json::from_value(cur).context("odi.json")?;
@@ -479,10 +483,50 @@ impl Project {
         if let Some(t) = secs.and_then(|s| chrono::DateTime::from_timestamp(s, 0)) {
             bi.time = t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
         }
+        // The version: odi.json's; else a version tag on this commit
+        // (v1.4.2), the project's own (package.json, pyproject.toml), or the
+        // commit.
+        if self.m.version.is_empty() {
+            self.m.version = self.project_version();
+        }
         if !bi.revision.is_empty() && self.m.version.is_empty() {
             self.m.version = bi.revision.chars().take(12).collect();
         }
         self.m.build = Some(bi);
+    }
+}
+
+impl Project {
+    fn project_version(&self) -> String {
+        let tags = output(&self.dir, "git", &["tag", "--points-at", "HEAD"]);
+        let mut found: Vec<crate::versions::Version> =
+            tags.lines().filter_map(|t| crate::versions::Version::parse(t.trim())).collect();
+        found.sort();
+        if let Some(v) = found.pop() {
+            return v.to_string().trim_start_matches('v').to_string();
+        }
+        if let Ok(b) = fs::read(self.dir.join("package.json")) {
+            if let Some(v) =
+                serde_json::from_slice::<Value>(&b).ok().and_then(|v| v.get("version")?.as_str().map(String::from))
+            {
+                return v;
+            }
+        }
+        if let Ok(t) = fs::read_to_string(self.dir.join("pyproject.toml")) {
+            // (The [project] table's version = "…", without a TOML parser.)
+            let mut in_project = false;
+            for line in t.lines() {
+                let l = line.trim();
+                if l.starts_with('[') {
+                    in_project = l == "[project]" || l == "[tool.poetry]";
+                } else if in_project {
+                    if let Some(v) = l.strip_prefix("version").map(str::trim).and_then(|r| r.strip_prefix('=')) {
+                        return v.trim().trim_matches(['"', '\'']).to_string();
+                    }
+                }
+            }
+        }
+        String::new()
     }
 }
 

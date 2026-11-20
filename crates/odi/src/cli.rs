@@ -203,6 +203,15 @@ pub const COMMANDS: &[Command] = &[
         true,
     ),
     c(
+        "diff",
+        "Inspect and trust",
+        &["diff OLD NEW [flags]"],
+        "Compare two builds: what changed, and what a machine with the old one must fetch",
+        "OLD and NEW are ODI files or names in a registry (only their indexes are read).",
+        &["odi diff acme/web:1.4.2 acme/web:1.4.3", "odi diff old.odi new.odi --all"],
+        true,
+    ),
+    c(
         "extract",
         "Inspect and trust",
         &["extract FILE DIR"],
@@ -243,27 +252,67 @@ pub const COMMANDS: &[Command] = &[
     c(
         "push",
         "Registry",
-        &["push NAMESPACE/NAME[:TAG] [FILE...] [flags]"],
-        "Publish a file (or one per platform under one tag)",
-        "Only what the registry doesn't have yet is sent. With several files, each is the tag's \
-         build for its platform; --add adds to the platforms the tag already has.",
+        &["push [NAMESPACE/NAME[:VERSION]] [FILE...] [flags]"],
+        "Publish a version (one build per platform), and move latest to it",
+        "Only what the registry doesn't have yet is sent. The version is the one named \
+         (acme/web:1.4.2), or the next after the newest (--bump patch|minor|major), or the \
+         file's own (odi build takes it from a git tag, package.json or pyproject.toml). A \
+         release also moves latest; a pre-release (2.0.0-rc.1) doesn't.\n\n\
+         A published version doesn't change: pushing other builds to it is refused (--force \
+         moves it). Other tags (latest, staging) move. With several files, each is the build \
+         for its platform; --add adds platforms to a version one CI job at a time.\n\n\
+         Without a name, the repository is odi.json's \"repo\" (\"repo\": \"acme/web\").",
         &[
-            "odi push acme/web:1.4",
-            "odi push acme/web:1.4 web-amd64.odi web-arm64.odi",
-            "odi push acme/web:1.4 web-arm64.odi --add",
+            "odi push acme/web",
+            "odi push acme/web:1.4.2",
+            "odi push acme/web --bump minor",
+            "odi push acme/web:2.0.0-rc.1 --tag next",
+            "odi push acme/web:1.4.2 web-amd64.odi web-arm64.odi",
+            "odi push acme/web:1.4.2 web-arm64.odi --add",
         ],
         true,
     ),
     c(
         "pull",
         "Registry",
-        &["pull NAMESPACE/NAME[:TAG|@sha256:DIGEST] [flags]"],
+        &["pull NAMESPACE/NAME[:TAG|:RANGE|@sha256:DIGEST] [flags]"],
         "Download a file (this machine's platform), checked against its digest",
-        "",
-        &["odi pull acme/web:1.4", "odi pull acme/web@sha256:877a... -o web.odi"],
+        "Any command that takes a name takes a version range too: acme/web:1.4 is the newest \
+         1.4.x, acme/web:1 (or ^1.0) the newest 1.x.y, ~1.4.2 the newest 1.4.x from 1.4.2. \
+         A tag with that exact name wins.",
+        &["odi pull acme/web", "odi pull acme/web:1.4", "odi pull acme/web@sha256:877a... -o web.odi"],
         true,
     ),
-    c("tags", "Registry", &["tags NAMESPACE/NAME"], "List a repository's tags", "", &["odi tags acme/web"], false),
+    c(
+        "versions",
+        "Registry",
+        &["versions [NAMESPACE/NAME] [flags]"],
+        "List a repository's versions and tags: platforms, size, when",
+        "Newest version first, with the other tags pointing at the same builds (latest, \
+         staging). Without a name, odi.json's \"repo\". (odi tags is the same.)",
+        &["odi versions acme/web", "odi versions acme/web --all"],
+        true,
+    ),
+    c(
+        "tag",
+        "Registry",
+        &["tag NAMESPACE/NAME:FROM TAG... [flags]"],
+        "Point tags at a version's builds, without pushing again (promote, roll back)",
+        "FROM is a version, a range, a tag or @sha256:DIGEST. Versions already published \
+         don't move without --force.",
+        &["odi tag acme/web:1.4.2 latest", "odi tag acme/web:1.3 latest", "odi tag acme/web:staging production"],
+        true,
+    ),
+    c(
+        "search",
+        "Registry",
+        &["search [QUERY]"],
+        "Find public repositories (by name or language)",
+        "",
+        &["odi search", "odi search nextjs"],
+        false,
+    ),
+    c("repos", "Registry", &["repos"], "List your organization's repositories", "", &["odi repos"], false),
     c(
         "rm",
         "Registry",
@@ -356,6 +405,8 @@ fn metavar(c: &Command, sp: &Spec) -> String {
         "compress" => "LEVEL",
         "registry" => "URL",
         "token" => "TOKEN",
+        "bump" => "PART",
+        "tag" => "TAG",
         _ => "NAME",
     }
     .to_string()

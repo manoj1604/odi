@@ -7,10 +7,10 @@
 #   LOG=FILE: a line per request (time, method, path)
 #   NO_EXTRAS=1: tags without their builds (?builds=1), builds without their
 #   parts' (?parts=1), as older registries
-import hashlib, json, sys, time, re, os
+import hashlib, json, sys, time, re, os, urllib.parse
 DELAY = int(os.environ.get("DELAY_MS", "0")) / 1000
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-segs, builds, tags = {}, {}, {}   # hash->bytes; (repo,digest)->build; (repo,tag)->tag
+segs, builds, tags, repos = {}, {}, {}, {}   # hash->bytes; (repo,digest)->build; (repo,tag)->tag; repo->info
 def listing(b): return {"size": b["size"], "segments": [{"hash": s["hash"], "length": s["length"]} for s in b["segments"]]}
 def parts_of(b):
     # A set's parts' lists, from whichever repository has them (a real
@@ -37,14 +37,21 @@ class H(BaseHTTPRequestHandler):
         extras = os.environ.get("NO_EXTRAS") != "1"
         if m != "GET" and not p.endswith("/segments/batch") and self.headers.get("Authorization") != "Bearer secret": return self.send(401, {"error": "sign in"})
         r = re.match(r"^/v1/repos/([^/]+/[^/]+)(.*)$", p)
+        if p in ("/v1/search", "/v1/mine"):
+            q = urllib.parse.parse_qs(query).get("q", [""])[0].lower()
+            rows = [{"ns": k.split("/")[0], "name": k.split("/")[1], "public": v["public"], "updated": v.get("updated", 0), "language": "", "pulls": v["pulls"]} for k, v in repos.items()]
+            if p == "/v1/search": rows = [x for x in rows if x["public"] and x["updated"] and q in (x["ns"] + "/" + x["name"]).lower()]
+            return self.send(200, rows)
         if p == "/v1/usage": return self.send(200, {"bytes": sum(map(len, segs.values())), "namespaces": 1, "repos": 1, "limits": {"bytes": 1<<30, "file": 1<<28, "namespaces": 3, "repos": 10}})
         if not r: return self.send(404, {"error": "no route"})
         repo, rest = r.groups()
         if m == "POST" and rest == "/digests":
             b = json.loads(self.body()); d = b["digest"].split(":")[1]
-            builds[(repo, d)] = {"size": b["size"], "segments": b["segments"], "manifest": b["manifest"], "done": False}
+            repos.setdefault(repo, {"public": False, "pulls": 0})
+            if builds.get((repo, d), {}).get("done"): return self.send(200, {"digest": d, "ready": True, "missing": []})  # (the same build)
+            builds[(repo, d)] = {"size": b["size"], "segments": b["segments"], "manifest": b["manifest"], "done": False, "created": int(time.time()*1000)}
             missing = sorted({s["hash"] for s in b["segments"] if s["hash"] not in segs})
-            return self.send(200, {"ready": not missing, "missing": missing})
+            return self.send(200, {"digest": d, "ready": False, "missing": missing})
         if m == "POST" and rest == "/segments/batch" and os.environ.get("NO_BATCH") != "1":
             hs = json.loads(self.body())["hashes"]
             if any(h not in segs for h in hs): return self.send(404, {"error": "no piece"})
@@ -60,7 +67,7 @@ class H(BaseHTTPRequestHandler):
         if m == "GET" and rest.startswith("/digests/"):
             b = builds.get((repo, rest.split("/")[2]))
             if not b: return self.send(404, {"error": "no such build"})
-            out = listing(b)
+            out = listing(b); out.update({"digest": rest.split("/")[2], "manifest": b["manifest"], "created": b["created"]})
             if extras and "parts=1" in query: out["parts"] = parts_of(b)
             return self.send(200, out)
         if m == "GET" and rest.startswith("/segments/"):
@@ -68,9 +75,15 @@ class H(BaseHTTPRequestHandler):
         if rest.startswith("/tags/"):
             t = rest.split("/")[2]
             if m == "PUT":
-                b = json.loads(self.body()); old = tags.get((repo, t), {}).get("platforms", []) if b.get("add") else []
+                b = json.loads(self.body()); cur = tags.get((repo, t))
+                if any(not builds.get((repo, x["digest"].split(":")[-1]), {}).get("done") for x in b["platforms"]): return self.send(404, {"error": "no finished build with that digest here"})
+                expect = self.headers.get("If-Match")
+                if expect is not None and (cur["digest"] if cur else "") != expect.split(":")[-1]: return self.send(412, {"error": "the tag has moved"})
+                old = cur.get("platforms", []) if (b.get("add") and cur) else []
                 keep = [x for x in old if x["platform"] not in {p["platform"] for p in b["platforms"]}]
-                tags[(repo, t)] = {"tag": t, "updated": int(time.time()*1000), "platforms": keep + b["platforms"]}; return self.send(200, {})
+                plats = keep + [{"platform": x["platform"], "digest": x["digest"].split(":")[-1]} for x in b["platforms"]]
+                tags[(repo, t)] = {"tag": t, "digest": plats[0]["digest"], "updated": int(time.time()*1000), "platforms": plats}
+                repos.setdefault(repo, {"public": False, "pulls": 0})["updated"] = int(time.time()*1000); return self.send(200, {})
             if m == "GET":
                 if (repo, t) not in tags: return self.send(404, {"error": "no such tag"})
                 out = dict(tags[(repo, t)])
@@ -81,8 +94,17 @@ class H(BaseHTTPRequestHandler):
                         if b: out["builds"][x["digest"]] = listing(b); out["builds"].update(parts_of(b))
                 return self.send(200, out)
             if m == "DELETE": tags.pop((repo, t), None); return self.send(200, {})
-        if m == "GET" and rest == "/tags": return self.send(200, [v for (rp, _), v in tags.items() if rp == repo])
-        if m == "PUT" and rest == "": return self.send(200, {})
+        if m == "GET" and rest == "/tags":
+            if repo not in repos: return self.send(404, {"error": "no such repository"})
+            return self.send(200, sorted([v for (rp, _), v in tags.items() if rp == repo], key=lambda v: -v["updated"]))
+        if m == "PUT" and rest == "":
+            repos.setdefault(repo, {"public": False, "pulls": 0})["public"] = bool(json.loads(self.body()).get("public")); return self.send(200, {})
+        if m == "GET" and rest == "":
+            if repo not in repos: return self.send(404, {"error": "no such repository"})
+            ts = sorted([v for (rp, _), v in tags.items() if rp == repo], key=lambda v: -v["updated"])
+            ds = sorted([{"digest": d, "size": b["size"], "created": b["created"]} for (rp, d), b in builds.items() if rp == repo and b["done"]], key=lambda x: -x["created"])
+            info = repos[repo]
+            return self.send(200, {"namespace": repo.split("/")[0], "name": repo.split("/")[1], "public": info["public"], "mine": True, "pulls": info["pulls"], "language": "", "updated": info.get("updated", 0), "tags": ts, "digests": ds})
         return self.send(404, {"error": "no route " + m + " " + p})
     def do_GET(self): self.route("GET")
     def do_POST(self): self.route("POST")

@@ -30,6 +30,7 @@ Fast starts:
 Inspect and trust:
   inspect      Show what's in it: processes, static files, runtime, parts, signatures, size
   verify       Check every byte against its digest, and its signatures
+  diff         Compare two builds: what changed, and what a machine with the old one must fetch
   extract      Unpack it into a folder (a set: put together first)
   key          Make or list signing keys (ed25519, in ~/.odi/keys)
   sign         Sign it with one of your keys (its digest doesn't change)
@@ -37,9 +38,12 @@ Inspect and trust:
 Registry:
   login        Sign in to a registry
   logout       Forget the registry sign-in
-  push         Publish a file (or one per platform under one tag)
+  push         Publish a version (one build per platform), and move latest to it
   pull         Download a file (this machine's platform), checked against its digest
-  tags         List a repository's tags
+  versions     List a repository's versions and tags: platforms, size, when
+  tag          Point tags at a version's builds, without pushing again (promote, roll back)
+  search       Find public repositories (by name or language)
+  repos        List your organization's repositories
   rm           Delete a tag, a build, or a repository with its builds
   usage        Show what your organization stores, and its limits
 
@@ -378,6 +382,26 @@ Examples:
   odi verify app.odi --key ed25519:3f1c...
 ```
 
+## odi diff
+
+```
+odi diff: Compare two builds: what changed, and what a machine with the old one must fetch
+
+Usage:
+  odi diff OLD NEW [flags]
+
+OLD and NEW are ODI files or names in a registry (only their indexes are
+read).
+
+Flags:
+  --all       list every changed file, not just the first 40
+  -h, --help  this help
+
+Examples:
+  odi diff acme/web:1.4.2 acme/web:1.4.3
+  odi diff old.odi new.odi --all
+```
+
 ## odi extract
 
 ```
@@ -460,24 +484,40 @@ Examples:
 ## odi push
 
 ```
-odi push: Publish a file (or one per platform under one tag)
+odi push: Publish a version (one build per platform), and move latest to it
 
 Usage:
-  odi push NAMESPACE/NAME[:TAG] [FILE...] [flags]
+  odi push [NAMESPACE/NAME[:VERSION]] [FILE...] [flags]
 
-Only what the registry doesn't have yet is sent. With several files, each is
-the tag's build for its platform; --add adds to the platforms the tag already
-has.
+Only what the registry doesn't have yet is sent. The version is the one named
+(acme/web:1.4.2), or the next after the newest (--bump patch|minor|major), or
+the file's own (odi build takes it from a git tag, package.json or
+pyproject.toml). A release also moves latest; a pre-release (2.0.0-rc.1)
+doesn't.
+
+A published version doesn't change: pushing other builds to it is refused
+(--force moves it). Other tags (latest, staging) move. With several files,
+each is the build for its platform; --add adds platforms to a version one CI
+job at a time.
+
+Without a name, the repository is odi.json's "repo" ("repo": "acme/web").
 
 Flags:
-  --public    make the repository public
-  --add       add to the platforms the tag already has
-  -h, --help  this help
+  --bump PART  publish the next version after the newest one: patch, minor or major
+  --tag TAG    another tag to point at it, such as staging (repeat)
+  --no-latest  don't move latest to it
+  --add        add to the platforms the version or tag already has (one build per platform)
+  --public     make the repository public
+  --force      move a version that's already published to these builds
+  -h, --help   this help
 
 Examples:
-  odi push acme/web:1.4
-  odi push acme/web:1.4 web-amd64.odi web-arm64.odi
-  odi push acme/web:1.4 web-arm64.odi --add
+  odi push acme/web
+  odi push acme/web:1.4.2
+  odi push acme/web --bump minor
+  odi push acme/web:2.0.0-rc.1 --tag next
+  odi push acme/web:1.4.2 web-amd64.odi web-arm64.odi
+  odi push acme/web:1.4.2 web-arm64.odi --add
 ```
 
 ## odi pull
@@ -486,7 +526,11 @@ Examples:
 odi pull: Download a file (this machine's platform), checked against its digest
 
 Usage:
-  odi pull NAMESPACE/NAME[:TAG|@sha256:DIGEST] [flags]
+  odi pull NAMESPACE/NAME[:TAG|:RANGE|@sha256:DIGEST] [flags]
+
+Any command that takes a name takes a version range too: acme/web:1.4 is the
+newest 1.4.x, acme/web:1 (or ^1.0) the newest 1.x.y, ~1.4.2 the newest 1.4.x
+from 1.4.2. A tag with that exact name wins.
 
 Flags:
   -o FILE             where to write it
@@ -494,20 +538,75 @@ Flags:
   -h, --help          this help
 
 Examples:
+  odi pull acme/web
   odi pull acme/web:1.4
   odi pull acme/web@sha256:877a... -o web.odi
 ```
 
-## odi tags
+## odi versions
 
 ```
-odi tags: List a repository's tags
+odi versions: List a repository's versions and tags: platforms, size, when
 
 Usage:
-  odi tags NAMESPACE/NAME
+  odi versions [NAMESPACE/NAME] [flags]
+
+Newest version first, with the other tags pointing at the same builds (latest,
+staging). Without a name, odi.json's "repo". (odi tags is the same.)
+
+Flags:
+  --all       also list builds no tag points at
+  -h, --help  this help
 
 Examples:
-  odi tags acme/web
+  odi versions acme/web
+  odi versions acme/web --all
+```
+
+## odi tag
+
+```
+odi tag: Point tags at a version's builds, without pushing again (promote, roll back)
+
+Usage:
+  odi tag NAMESPACE/NAME:FROM TAG... [flags]
+
+FROM is a version, a range, a tag or @sha256:DIGEST. Versions already
+published don't move without --force.
+
+Flags:
+  --force     move a version that's already published
+  -h, --help  this help
+
+Examples:
+  odi tag acme/web:1.4.2 latest
+  odi tag acme/web:1.3 latest
+  odi tag acme/web:staging production
+```
+
+## odi search
+
+```
+odi search: Find public repositories (by name or language)
+
+Usage:
+  odi search [QUERY]
+
+Examples:
+  odi search
+  odi search nextjs
+```
+
+## odi repos
+
+```
+odi repos: List your organization's repositories
+
+Usage:
+  odi repos
+
+Examples:
+  odi repos
 ```
 
 ## odi rm

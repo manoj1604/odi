@@ -8,6 +8,8 @@
 - [Browser apps and games](browser.md): the browser runner, hosting it,
   offline play.
 - [Signing and trust](signing.md).
+- [Publishing on the hub](hub.md): versions, `--bump`, ranges, rolling
+  back, CI.
 - [Registries](registry.md): names, push and pull, fast starts, the protocol.
 - [Configuration](configuration.md): files, folders and environment
   variables.

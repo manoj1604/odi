@@ -25,6 +25,13 @@ Inside the cache folder:
 Deleting the cache folder is safe: odi fetches or unpacks again what it
 needs.
 
+## A project's odi.json
+
+`odi build` merges a project's `odi.json` into the manifest, so it can set
+any manifest field (`name`, `version`, `env`, `processes`…). One more key
+isn't part of the manifest: `"repo": "acme/web"`, the repository `odi push`
+and `odi versions` use when no name is given ([publishing](hub.md)).
+
 ## Environment variables
 
 | Variable | What it does |

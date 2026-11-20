@@ -2,7 +2,8 @@
 
 A registry keeps ODI files under names like `acme/web:1.4` and serves them
 in pieces, so publishing sends only what's new and running reads only
-what's needed.
+what's needed. For the everyday workflow (versions, `--bump`, ranges,
+rolling back, CI), see [publishing on the hub](hub.md).
 
 ## Names
 
@@ -17,7 +18,10 @@ odi login                               # asks for a token (or --token)
 odi push acme/web:1.4                   # the .odi file in this folder, or name the files
 odi push acme/web:1.4 web-amd64.odi web-arm64.odi   # one tag, one build per platform
 odi pull acme/web:1.4                   # the build for this machine, checked
-odi tags acme/web
+odi versions acme/web                   # versions and tags
+odi tag acme/web:1.4.1 latest           # move a tag, without pushing
+odi diff acme/web:1.4.1 acme/web:1.4.2  # what changed
+odi search nextjs                       # public repositories; odi repos: yours
 odi rm acme/web:old                     # a tag; NAME@sha256:… a build; NAME --repo everything
 odi usage                               # what your organization stores, and its limits
 odi logout

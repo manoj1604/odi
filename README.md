@@ -98,6 +98,8 @@ Windows isn't supported yet.
 - [Browser apps and games](docs/browser.md): `odi web`, hosting the
   runner, offline play.
 - [Signing and trust](docs/signing.md).
+- [Publishing on the hub](docs/hub.md): versions, ranges, rolling back,
+  CI.
 - [Registries](docs/registry.md): push, pull, run from a registry, fast
   starts.
 - [Configuration](docs/configuration.md): files and environment

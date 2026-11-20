@@ -85,7 +85,7 @@ pub fn parse_ref(s: &str) -> Result<Ref> {
 }
 
 /// null as the type's empty value (a registry may send either).
-fn nullable<'de, D: Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> Result<T, D::Error> {
+pub fn nullable<'de, D: Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> Result<T, D::Error> {
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
@@ -155,6 +155,11 @@ impl std::fmt::Display for StatusError {
 
 impl std::error::Error for StatusError {}
 
+/// Whether an error is the registry answering with this status.
+pub fn is_status(e: &anyhow::Error, status: u16) -> bool {
+    e.downcast_ref::<StatusError>().is_some_and(|s| s.status == status)
+}
+
 /// Talks to one registry.
 pub struct Client {
     base: String,
@@ -190,7 +195,23 @@ pub fn new_client(r: &Ref) -> Client {
 }
 
 impl Client {
+    pub fn signed_in(&self) -> bool {
+        !self.token.is_empty()
+    }
+
     pub fn call(&self, method: &str, path: &str, body: Option<&[u8]>, content_type: Option<&str>) -> Result<Vec<u8>> {
+        self.call_with(method, path, body, content_type, &[])
+    }
+
+    /// As call, with more headers (If-Match).
+    pub fn call_with(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&[u8]>,
+        content_type: Option<&str>,
+        headers: &[(&str, &str)],
+    ) -> Result<Vec<u8>> {
         let mut last = anyhow!("no answer");
         for attempt in 0..4u64 {
             if attempt > 0 {
@@ -205,6 +226,9 @@ impl Client {
             }
             if let Some(ct) = content_type {
                 req = req.set("Content-Type", ct);
+            }
+            for (k, v) in headers {
+                req = req.set(k, v);
             }
             let res = match body {
                 Some(b) => req.send_bytes(b),
@@ -409,7 +433,7 @@ pub fn each(n: usize, f: impl Fn(usize) -> Result<()> + Sync) -> Result<()> {
 // --- push and pull -----------------------------------------------------------------
 
 /// The one .odi file here, when a command isn't given one.
-fn only_odi_file() -> Result<String> {
+pub fn only_odi_file() -> Result<String> {
     let found: Vec<String> = fs::read_dir(".")?
         .flatten()
         .filter_map(|e| e.file_name().into_string().ok())
@@ -436,44 +460,8 @@ pub fn platform_of(m: &Manifest) -> String {
     }
 }
 
-pub fn cmd_push(args: &[String]) -> Result<()> {
-    const U: &str = "odi push NAMESPACE/NAME[:TAG] [FILE...] [--add] [--public]";
-    let specs = [
-        flag("public", Bool, "make the repository public"),
-        flag("add", Bool, "add to the platforms the tag already has"),
-    ];
-    let (f, pos) = flags::parse(&specs, args, U)?;
-    if pos.is_empty() {
-        bail!("usage: {U}");
-    }
-    let r = parse_ref(&pos[0])?;
-    if !r.digest.is_empty() {
-        bail!("push to a tag, not a digest: a digest comes from the file");
-    }
-    let files = if pos.len() > 1 { pos[1..].to_vec() } else { vec![only_odi_file()?] };
-    let c = new_client(&r);
-    if c.token.is_empty() {
-        bail!("sign in first: odi login");
-    }
-    let base = format!("/v1/repos/{}", r.repo());
-    let mut list = Vec::new();
-    let mut seen: HashMap<String, String> = HashMap::new();
-    for path in &files {
-        let p = push_file(&c, &base, path).with_context(|| path.clone())?;
-        if let Some(other) = seen.insert(p.platform.clone(), path.clone()) {
-            bail!("{other} and {path} are both for {}", p.platform);
-        }
-        list.push(p);
-    }
-    c.send_json("PUT", &format!("{base}/tags/{}", r.tag), Some(&json!({"platforms": list, "add": f.bool("add")})))?;
-    if f.bool("public") {
-        c.send_json("PUT", &base, Some(&json!({"public": true})))?;
-    }
-    Ok(())
-}
-
 /// Sends one file's missing pieces and finishes it (no tag yet).
-fn push_file(c: &Client, base: &str, path: &str) -> Result<TagPlatform> {
+pub fn push_file(c: &Client, base: &str, path: &str) -> Result<TagPlatform> {
     let rd = Reader::open(path)?;
     let segs = segments(&rd)?;
     let digest = hex::encode(rd.digest);
@@ -532,8 +520,22 @@ fn resolve(c: &Client, r: &Ref, platform: &str) -> Result<String> {
         #[serde(default)]
         builds: HashMap<String, Build>,
     }
-    let path = format!("/v1/repos/{}/tags/{}?builds=1", r.repo(), path_escape(&r.tag));
-    let t: Tag = c.json("GET", &path, None)?;
+    let get = |tag: &str| -> Result<Tag> {
+        c.json("GET", &format!("/v1/repos/{}/tags/{}?builds=1", r.repo(), path_escape(tag)), None)
+    };
+    let (t, tag) = match get(&r.tag) {
+        Ok(t) => (t, r.tag.clone()),
+        // (1.4, ^1.4, ~1.4.2: the newest version in the range.)
+        Err(e) if is_status(&e, 404) && crate::versions::Range::parse(&r.tag).is_some() => {
+            let tag = crate::publish::pick_version(c, r)?;
+            eprintln!("odi: {}:{} is {tag}", r.repo(), r.tag);
+            (get(&tag)?, tag)
+        }
+        Err(e) if is_status(&e, 404) => {
+            return Err(e.context(format!("{}:{} (odi versions {} lists them)", r.repo(), r.tag, r.repo())))
+        }
+        Err(e) => return Err(e),
+    };
     for (d, b) in t.builds {
         remember_build(&d, b);
     }
@@ -546,7 +548,7 @@ fn resolve(c: &Client, r: &Ref, platform: &str) -> Result<String> {
         return Ok(p.digest.clone());
     }
     let has: Vec<&str> = t.platforms.iter().map(|p| p.platform.as_str()).collect();
-    bail!("{}:{} has no build for {platform} (it has {})", r.repo(), r.tag, has.join(", "))
+    bail!("{}:{tag} has no build for {platform} (it has {})", r.repo(), has.join(", "))
 }
 
 /// What Go's url.PathEscape leaves as it is: unreserved characters and the
@@ -565,7 +567,7 @@ const PATH_SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANU
     .remove(b':')
     .remove(b'@');
 
-fn path_escape(s: &str) -> String {
+pub fn path_escape(s: &str) -> String {
     percent_encoding::utf8_percent_encode(s, PATH_SEGMENT).to_string()
 }
 
@@ -1138,32 +1140,5 @@ pub fn cmd_usage(args: &[String]) -> Result<()> {
         u.limits.repos,
         human(u.limits.file)
     );
-    Ok(())
-}
-
-pub fn cmd_tags(args: &[String]) -> Result<()> {
-    if args.len() != 1 {
-        bail!("usage: odi tags NAMESPACE/NAME");
-    }
-    let r = parse_ref(&args[0])?;
-    #[derive(Deserialize)]
-    struct Tag {
-        #[serde(default)]
-        tag: String,
-        #[serde(default)]
-        updated: i64,
-        #[serde(default, deserialize_with = "nullable")]
-        platforms: Vec<TagPlatform>,
-    }
-    let tags: Vec<Tag> = new_client(&r).json("GET", &format!("/v1/repos/{}/tags", r.repo()), None)?;
-    for t in tags {
-        let when = chrono::DateTime::from_timestamp_millis(t.updated)
-            .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_default();
-        println!("{:<24} {when}", t.tag);
-        for p in t.platforms {
-            println!("  {:<22} sha256:{}", p.platform, &p.digest[..12.min(p.digest.len())]);
-        }
-    }
     Ok(())
 }
