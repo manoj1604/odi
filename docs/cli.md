@@ -7,53 +7,56 @@ odi: one file for a program's build output, any language, runs anywhere
 
 Usage: odi COMMAND [ARGUMENTS] [FLAGS]
 
-Build:
+Build and run:
+  init         Write the project's odi.json, from what odi finds in it
   build        Build a project into an ODI file (Go, Node.js, Next.js, Python, static)
-  pack         Pack a folder already laid out (app/, static/, runtime/, meta/)
-
-Run:
   run          Run an ODI file, or one from a registry, on this machine
-  exec         Run one of its processes in this terminal (a command-line tool)
-  mcp          Serve what it provides as an mcp plug, as a stdio MCP server (for AI agents)
-  attach       Add a part to a set that's running
-  web          Run a browser app (its static/ files) in a browser tab
+  bundle       Make one executable that runs the app, with nothing to install where it runs
 
-Parts and sets:
-  set          Make a set: parts pinned by digest, put together when it runs
-  runtime      Make a runtime part: one copy serves every app that pins it
-  part         This machine's store of parts
-
-Fast starts:
-  profile      Record what it reads while starting: its start list (Linux)
-  fill         Fetch its start list (or all of it) onto this machine before its first run
-
-Inspect and trust:
+Look inside:
   inspect      Show what's in it: processes, static files, runtime, parts, signatures, size
-  verify       Check every byte against its digest, and its signatures
-  diff         Compare two builds: what changed, and what a machine with the old one must fetch
-  extract      Unpack it into a folder (a set: put together first)
-  key          Make or list signing keys (ed25519, in ~/.odi/keys)
-  sign         Sign it with one of your keys (its digest doesn't change)
+  hook         Set up cd into .odi files: cd app.odi (add its line to your shell)
+  close        Let go of the files cd went into
 
-Registry:
+Publish on the hub:
   login        Sign in to a registry
-  logout       Forget the registry sign-in
   push         Publish a version (one build per platform), and move latest to it
   pull         Download a file (this machine's platform), checked against its digest
   versions     List a repository's versions and tags: platforms, size, when
-  tag          Point tags at a version's builds, without pushing again (promote, roll back)
-  search       Find public repositories (by name or language)
-  repos        List your organization's repositories
-  rm           Delete a tag, a build, or a repository with its builds
-  usage        Show what your organization stores, and its limits
+  logout       Forget the registry sign-in
 
-This command:
+Help:
   help         Show help for odi, or for one command
-  completions  Print a shell completion script
   version      Show odi's version
 
 Run 'odi help COMMAND' (or odi COMMAND --help) for its flags and examples.
+More commands, experimental: odi help --all
 Docs: https://github.com/manoj1604/odi/tree/main/docs
+```
+
+## odi init
+
+```
+odi init: Write the project's odi.json, from what odi finds in it
+
+Usage:
+  odi init [PROJECT] [flags]
+
+Every project odi builds has an odi.json: its name, its type (go, node,
+nextjs, python, static) and anything odi can't work out (the runtime, whether
+to include it, build and start commands, the port, environment variables). odi
+init writes one with what it finds; edit it as you like. Specification:
+docs/odi-json.md.
+
+Flags:
+  --type NAME  what kind of project, when odi can't tell
+  --name NAME  the app's name (default: package.json's, go.mod's, or the folder's)
+  -h, --help   this help
+
+Examples:
+  odi init
+  odi init --type static
+  odi init ../shop --name shop
 ```
 
 ## odi build
@@ -65,9 +68,16 @@ Usage:
   odi build [PROJECT] [flags]
 
 Runs the project's own build (go build, npm ci and npm run build, pip) and
-packs what it produced, with a manifest that says how to start it. A
-Procfile's web: line and an odi.json (any manifest fields) in the project
-override what odi finds. The same commit builds to the same digest.
+packs what it produced, with a manifest that says how to start it. The same
+commit builds to the same digest.
+
+It needs the project's odi.json (odi init writes one): its name and type, and
+anything odi can't work out:
+  {"name": "shop", "type": "nextjs", "runtime": "node 22", "include_runtime": true,
+   "env": {"DATABASE_URL": "required"}}
+include_runtime puts Node.js itself in the file (the official release for the
+target, checked), so it runs where Node.js isn't installed. Every key:
+docs/odi-json.md.
 
 --platform builds for another machine: Go, Node.js and Next.js swap compiled
 packages for the target's, at the lockfile's versions; Python builds for this
@@ -84,6 +94,7 @@ Flags:
   --use-path-runtime  with --profile: run a runtime pinned by digest with this machine's
   --runtime PART      a runtime part (file or registry name) to pin, by digest and exact version
   --compress LEVEL    default, or max (zstd 19: about 10% smaller, as fast to read)
+  --static app|odi    Next.js: who serves .next/static and public/: app (default) or odi (cached forever, CDN-ready)
   -h, --help          this help
 
 Examples:
@@ -92,28 +103,6 @@ Examples:
   odi build --platform linux/amd64
   odi build --runtime node-22.23.3-linux-arm64.odi
   odi build --profile --path / --path /pricing
-```
-
-## odi pack
-
-```
-odi pack: Pack a folder already laid out (app/, static/, runtime/, meta/)
-
-Usage:
-  odi pack DIR [flags]
-
-For build output odi doesn't build itself. The manifest comes from
-DIR/odi.manifest.json (or --manifest) and isn't packed as a file.
-
-Flags:
-  --compress LEVEL  default, or max (zstd 19: about 10% smaller, as fast to read)
-  -o FILE           the ODI file to write (default: NAME.odi)
-  --manifest FILE   the manifest (default: DIR/odi.manifest.json, kept out of the file)
-  -h, --help        this help
-
-Examples:
-  odi pack out/ -o site.odi
-  odi pack dist --manifest odi.manifest.json --compress max
 ```
 
 ## odi run
@@ -144,6 +133,247 @@ Examples:
   odi run app.odi
   odi run acme/web:1.4 --port 3000 -e DATABASE_URL=postgres://...
   odi run acme/web:1.4 --trust ed25519:3f1c...
+```
+
+## odi bundle
+
+```
+odi bundle: Make one executable that runs the app, with nothing to install where it runs
+
+Usage:
+  odi bundle FILE [-o OUT] [--platform OS/ARCH] [--runner FILE]
+
+Writes a small static odi for the target machine with the ODI file after it,
+unchanged (the same digest). For a machine with no Node.js, build the app with
+its runtime inside ("include_runtime": true in odi.json). Copy it to a VM, a
+microVM or a server and run it: it serves the app as odi run would (--port, -e
+KEY=VALUE). OUT --odi-file app.odi gets the ODI file back out. The runner is
+this odi when it fits the target, else odi's release for it, checked against
+its SHA256SUMS.
+
+Flags:
+  -o OUT              the executable to write (default: the file's name, without .odi)
+  --platform OS/ARCH  the machine it's for, when the file runs anywhere (default: linux and this CPU)
+  --runner FILE       the odi to bundle with (default: this one if it fits, else the release for the target)
+  -h, --help          this help
+
+Examples:
+  odi bundle app.odi -o app && scp app vm: && ssh vm ./app
+  odi bundle app.odi --platform linux/amd64
+```
+
+## odi inspect
+
+```
+odi inspect: Show what's in it: processes, static files, runtime, parts, signatures, size
+
+Usage:
+  odi inspect FILE|NAME
+
+Examples:
+  odi inspect app.odi
+  odi inspect acme/web:1.4
+```
+
+## odi hook
+
+```
+odi hook: Set up cd into .odi files: cd app.odi (add its line to your shell)
+
+Usage:
+  odi hook zsh|bash|fish
+
+Add it to your shell's startup file:
+  zsh:  eval "$(odi hook zsh)"    (in ~/.zshrc)
+  bash: eval "$(odi hook bash)"   (in ~/.bashrc)
+  fish: odi hook fish | source       (in ~/.config/fish/config.fish)
+Then cd app.odi, cd app.odi/app or cd acme/web:1.4 (a hub name with a tag)
+goes inside, read-only, and ls, cat and the rest work as usual. On Linux the
+file is mounted and read as you look (FUSE); elsewhere it's unpacked once
+under ~/.odi/open. odi close lets them go. A cd to a folder works as it always
+did.
+
+Examples:
+  odi hook zsh
+```
+
+## odi close
+
+```
+odi close: Let go of the files cd went into
+
+Usage:
+  odi close [FILE|NAME]
+
+Examples:
+  odi close
+  odi close app.odi
+```
+
+## odi login
+
+```
+odi login: Sign in to a registry
+
+Usage:
+  odi login [flags]
+
+Without --token, asks for one. The default registry is hub.odisssi.com;
+--registry (or $ODI_REGISTRY) names another.
+
+Flags:
+  --token TOKEN   an account token, or an organization's API key
+  --registry URL  another registry's address
+  -h, --help      this help
+
+Examples:
+  odi login
+  odi login --registry https://registry.example.com --token $TOKEN
+```
+
+## odi push
+
+```
+odi push: Publish a version (one build per platform), and move latest to it
+
+Usage:
+  odi push [NAMESPACE/NAME[:VERSION]] [FILE...] [flags]
+
+Only what the registry doesn't have yet is sent. The version is the one named
+(acme/web:1.4.2), or the next after the newest (--bump patch|minor|major), or
+the file's own (odi build takes it from a git tag, package.json or
+pyproject.toml). A release also moves latest; a pre-release (2.0.0-rc.1)
+doesn't.
+
+A published version doesn't change: pushing other builds to it is refused
+(--force moves it). Other tags (latest, staging) move. With several files,
+each is the build for its platform; --add adds platforms to a version one CI
+job at a time.
+
+Without a name, the repository is odi.json's "repo" ("repo": "acme/web").
+
+Flags:
+  --bump PART  publish the next version after the newest one: patch, minor or major
+  --tag TAG    another tag to point at it, such as staging (repeat)
+  --no-latest  don't move latest to it
+  --add        add to the platforms the version or tag already has (one build per platform)
+  --public     make the repository public
+  --force      move a version that's already published to these builds
+  -h, --help   this help
+
+Examples:
+  odi push acme/web
+  odi push acme/web:1.4.2
+  odi push acme/web --bump minor
+  odi push acme/web:2.0.0-rc.1 --tag next
+  odi push acme/web:1.4.2 web-amd64.odi web-arm64.odi
+  odi push acme/web:1.4.2 web-arm64.odi --add
+```
+
+## odi pull
+
+```
+odi pull: Download a file (this machine's platform), checked against its digest
+
+Usage:
+  odi pull NAMESPACE/NAME[:TAG|:RANGE|@sha256:DIGEST] [flags]
+
+Any command that takes a name takes a version range too: acme/web:1.4 is the
+newest 1.4.x, acme/web:1 (or ^1.0) the newest 1.x.y, ~1.4.2 the newest 1.4.x
+from 1.4.2. A tag with that exact name wins.
+
+Flags:
+  -o FILE             where to write it
+  --platform OS/ARCH  the platform to get (OS/ARCH)
+  -h, --help          this help
+
+Examples:
+  odi pull acme/web
+  odi pull acme/web:1.4
+  odi pull acme/web@sha256:877a... -o web.odi
+```
+
+## odi versions
+
+```
+odi versions: List a repository's versions and tags: platforms, size, when
+
+Usage:
+  odi versions [NAMESPACE/NAME] [flags]
+
+Newest version first, with the other tags pointing at the same builds (latest,
+staging). Without a name, odi.json's "repo". (odi tags is the same.)
+
+Flags:
+  --all       also list builds no tag points at
+  -h, --help  this help
+
+Examples:
+  odi versions acme/web
+  odi versions acme/web --all
+```
+
+## odi logout
+
+```
+odi logout: Forget the registry sign-in
+
+Usage:
+  odi logout
+
+Examples:
+  odi logout
+```
+
+## odi help
+
+```
+odi help: Show help for odi, or for one command
+
+Usage:
+  odi help [COMMAND]
+
+Examples:
+  odi help run
+```
+
+## odi version
+
+```
+odi version: Show odi's version
+
+Usage:
+  odi version
+
+Examples:
+  odi version
+```
+
+# Experimental commands
+
+These work, and may change before they join the list above (see
+[TODO.md](../TODO.md)). `odi help --all` lists them.
+
+## odi pack
+
+```
+odi pack: Pack a folder already laid out (app/, static/, runtime/, meta/)
+
+Usage:
+  odi pack DIR [flags]
+
+For build output odi doesn't build itself. The manifest comes from
+DIR/odi.manifest.json (or --manifest) and isn't packed as a file.
+
+Flags:
+  --compress LEVEL  default, or max (zstd 19: about 10% smaller, as fast to read)
+  -o FILE           the ODI file to write (default: NAME.odi)
+  --manifest FILE   the manifest (default: DIR/odi.manifest.json, kept out of the file)
+  -h, --help        this help
+
+Examples:
+  odi pack out/ -o site.odi
+  odi pack dist --manifest odi.manifest.json --compress max
 ```
 
 ## odi exec
@@ -349,19 +579,6 @@ Examples:
   odi fill --all acme/web:1.4 acme/api:2
 ```
 
-## odi inspect
-
-```
-odi inspect: Show what's in it: processes, static files, runtime, parts, signatures, size
-
-Usage:
-  odi inspect FILE|NAME
-
-Examples:
-  odi inspect app.odi
-  odi inspect acme/web:1.4
-```
-
 ## odi verify
 
 ```
@@ -414,6 +631,35 @@ Examples:
   odi extract app.odi out/
 ```
 
+## odi shell
+
+```
+odi shell: Open a shell inside it, ready to start it by hand (cd into the file)
+
+Usage:
+  odi shell FILE|NAME [PATH] [flags] [-- COMMAND...]
+
+You land in the app's folder (app/) with everything odi run would give it: the
+file's runtime first on PATH (node, python), its environment, PORT, and its
+writable folders. odi prints the start command; when the app has static files
+(Next.js's /_next/static), odi serves them on --port (8080) and passes the
+rest to the app, as odi run does. On Linux the file is mounted read-only and
+read as you go (FUSE); elsewhere you get a copy of your own, removed when you
+exit. ODI_ROOT is the file's top.
+
+Flags:
+  --port PORT         where odi serves the app's static files (default: the app's port, else 8080)
+  -e KEY=VALUE        KEY=VALUE for the app (repeat)
+  --use-path-runtime  use this machine's runtime for one pinned by digest, unchecked
+  -h, --help          this help
+
+Examples:
+  odi shell app.odi            # then: node server.js, and open http://localhost:8080
+  odi shell acme/web:1.4 -e DATABASE_URL=postgres://localhost/web
+  odi shell app.odi static     # look around the static files
+  odi shell app.odi -- node -e 'console.log(process.version)'
+```
+
 ## odi key
 
 ```
@@ -446,121 +692,6 @@ Flags:
 Examples:
   odi sign app.odi
   odi sign app.odi --key release
-```
-
-## odi login
-
-```
-odi login: Sign in to a registry
-
-Usage:
-  odi login [flags]
-
-Without --token, asks for one. The default registry is hub.odisssi.com;
---registry (or $ODI_REGISTRY) names another.
-
-Flags:
-  --token TOKEN   an account token, or an organization's API key
-  --registry URL  another registry's address
-  -h, --help      this help
-
-Examples:
-  odi login
-  odi login --registry https://registry.example.com --token $TOKEN
-```
-
-## odi logout
-
-```
-odi logout: Forget the registry sign-in
-
-Usage:
-  odi logout
-
-Examples:
-  odi logout
-```
-
-## odi push
-
-```
-odi push: Publish a version (one build per platform), and move latest to it
-
-Usage:
-  odi push [NAMESPACE/NAME[:VERSION]] [FILE...] [flags]
-
-Only what the registry doesn't have yet is sent. The version is the one named
-(acme/web:1.4.2), or the next after the newest (--bump patch|minor|major), or
-the file's own (odi build takes it from a git tag, package.json or
-pyproject.toml). A release also moves latest; a pre-release (2.0.0-rc.1)
-doesn't.
-
-A published version doesn't change: pushing other builds to it is refused
-(--force moves it). Other tags (latest, staging) move. With several files,
-each is the build for its platform; --add adds platforms to a version one CI
-job at a time.
-
-Without a name, the repository is odi.json's "repo" ("repo": "acme/web").
-
-Flags:
-  --bump PART  publish the next version after the newest one: patch, minor or major
-  --tag TAG    another tag to point at it, such as staging (repeat)
-  --no-latest  don't move latest to it
-  --add        add to the platforms the version or tag already has (one build per platform)
-  --public     make the repository public
-  --force      move a version that's already published to these builds
-  -h, --help   this help
-
-Examples:
-  odi push acme/web
-  odi push acme/web:1.4.2
-  odi push acme/web --bump minor
-  odi push acme/web:2.0.0-rc.1 --tag next
-  odi push acme/web:1.4.2 web-amd64.odi web-arm64.odi
-  odi push acme/web:1.4.2 web-arm64.odi --add
-```
-
-## odi pull
-
-```
-odi pull: Download a file (this machine's platform), checked against its digest
-
-Usage:
-  odi pull NAMESPACE/NAME[:TAG|:RANGE|@sha256:DIGEST] [flags]
-
-Any command that takes a name takes a version range too: acme/web:1.4 is the
-newest 1.4.x, acme/web:1 (or ^1.0) the newest 1.x.y, ~1.4.2 the newest 1.4.x
-from 1.4.2. A tag with that exact name wins.
-
-Flags:
-  -o FILE             where to write it
-  --platform OS/ARCH  the platform to get (OS/ARCH)
-  -h, --help          this help
-
-Examples:
-  odi pull acme/web
-  odi pull acme/web:1.4
-  odi pull acme/web@sha256:877a... -o web.odi
-```
-
-## odi versions
-
-```
-odi versions: List a repository's versions and tags: platforms, size, when
-
-Usage:
-  odi versions [NAMESPACE/NAME] [flags]
-
-Newest version first, with the other tags pointing at the same builds (latest,
-staging). Without a name, odi.json's "repo". (odi tags is the same.)
-
-Flags:
-  --all       also list builds no tag points at
-  -h, --help  this help
-
-Examples:
-  odi versions acme/web
-  odi versions acme/web --all
 ```
 
 ## odi tag
@@ -640,18 +771,6 @@ Examples:
   odi usage
 ```
 
-## odi help
-
-```
-odi help: Show help for odi, or for one command
-
-Usage:
-  odi help [COMMAND]
-
-Examples:
-  odi help run
-```
-
 ## odi completions
 
 ```
@@ -667,16 +786,4 @@ Add it to your shell's startup file, for example:
 
 Examples:
   odi completions zsh
-```
-
-## odi version
-
-```
-odi version: Show odi's version
-
-Usage:
-  odi version
-
-Examples:
-  odi version
 ```

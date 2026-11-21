@@ -5,7 +5,6 @@
 //! change, while other tags (`latest`, `staging`) move.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -79,9 +78,7 @@ fn names_tag(s: &str) -> bool {
 
 /// The repository odi.json names (`"repo": "acme/web"`), if any.
 pub fn project_repo(dir: &Path) -> Option<String> {
-    let b = fs::read(dir.join("odi.json")).ok()?;
-    let v: Value = serde_json::from_slice(&b).ok()?;
-    v.get("repo")?.as_str().map(String::from)
+    crate::odijson::OdiJson::load(dir).ok()?.repo
 }
 
 fn same_platforms(a: &[TagPlatform], b: &[TagPlatform]) -> bool {

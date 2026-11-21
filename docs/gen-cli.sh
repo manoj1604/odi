@@ -20,5 +20,18 @@ if [ -n "${1:-}" ]; then ODI=$1; else "${CARGO:-cargo}" build -q -p odi; ODI=tar
     "$ODI" help "$c"
     echo '```'
   done
+  echo
+  echo "# Experimental commands"
+  echo
+  echo "These work, and may change before they join the list above (see"
+  echo "[TODO.md](../TODO.md)). \`odi help --all\` lists them."
+  for c in $("$ODI" help --list-more); do
+    echo
+    echo "## odi $c"
+    echo
+    echo '```'
+    "$ODI" help "$c"
+    echo '```'
+  done
 } > docs/cli.md
 echo "wrote docs/cli.md"

@@ -9,8 +9,13 @@ versions, pull, compare and roll back.
 ## Once: sign in and link the project
 
 ```sh
-odi login                 # paste a token or API key from your account
+odi login                 # paste an API key
 ```
+
+Make the key in your account's dashboard, under
+[API keys](https://dev.odisssi.com/dashboard#keys) (no account yet?
+[sign up](https://dev.odisssi.com/signup) first). On another registry,
+use the token it gives you: `odi login --registry URL`.
 
 Name the repository in the project's `odi.json`, so commands run in the
 project don't need it:
@@ -87,14 +92,12 @@ VERSION     TAGS     PLATFORMS                SIZE     UPDATED
 1.4.1                linux/amd64 linux/arm64  14.1 MB  2026-11-12 09:40
 ```
 
-`--all` also lists builds no tag points at; `odi rm acme/web@sha256:…`
-frees their space. `odi repos` lists your organization's repositories, and
-`odi search [QUERY]` finds public ones.
+`--all` also lists builds no tag points at.
 
 ## Pull and run
 
-Every command that takes a name (`pull`, `run`, `exec`, `mcp`, `inspect`,
-`fill`, `set`, `diff`) takes a version, a tag or a range:
+Every command that takes a name (`run`, `pull`, `inspect`, `cd`) takes a
+version, a tag or a range:
 
 | Name | Means |
 |---|---|
@@ -114,33 +117,12 @@ odi pull acme/web:1.4            # odi: acme/web:1.4 is 1.4.2
 odi run acme/web:1 --port 3000
 ```
 
-## Compare and roll back
+## Coming next
 
-```sh
-odi diff acme/web:1.4.1 acme/web:1.4.2
-```
-
-```
-acme/web:1.4.1 -> acme/web:1.4.2
-  version   1.4.1 -> 1.4.2
-  files     +2 -0 ~14 (3,211 the same)
-  size      61.2 MB -> 61.3 MB (+96 KB)
-  to fetch  412 KB of 14.1 MB (what's new to a machine that has the old one)
-
-+ app/.next/server/app/pricing/page.js  12 KB
-~ app/.next/server/app/page.js  31 KB -> 33 KB (+2 KB)
-…
-```
-
-Only the two builds' indexes are read, not the files. `diff` works on ODI
-files too.
-
-Point a tag at another version without pushing anything:
-
-```sh
-odi tag acme/web:1.4.1 latest    # roll back
-odi tag acme/web:staging production   # promote what staging runs
-```
+Comparing two builds (`odi diff`), rolling back or promoting by moving a
+tag (`odi tag acme/web:1.4.1 latest`), searching public repositories and
+deleting builds are experimental for now: `odi help --all` lists them, and
+[TODO.md](../TODO.md) what's planned.
 
 ## In CI
 

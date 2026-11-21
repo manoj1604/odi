@@ -1,8 +1,7 @@
 # Getting started
 
-This walks through building a project into an ODI file, running it, and
-publishing it. For every flag, see the [command reference](cli.md) or
-`odi help COMMAND`.
+Build a project into one ODI file, run it, look inside it, and publish it.
+For every flag, see the [command reference](cli.md) or `odi help COMMAND`.
 
 ## Install
 
@@ -15,51 +14,58 @@ Or build from source: `cargo install --git https://github.com/manoj1604/odi odi`
 
 ## Build
 
-From a project's folder:
+Every project has an [`odi.json`](odi-json.md) that says what it is.
+`odi init` writes one from what it finds:
+
+```sh
+cd shop
+odi init
+```
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/manoj1604/odi/main/schema/odi.schema.json",
+  "name": "shop",
+  "type": "nextjs",
+  "runtime": "node 22"
+}
+```
+
+Then build:
 
 ```sh
 odi build
 ```
 
-odi works out what the project is and runs its own build:
+odi runs the project's own build for its `type`:
 
-| Project | Found by | What odi does |
-|---|---|---|
-| Go | `go.mod` | `go build` with `CGO_ENABLED=0`: one static executable |
-| Node.js | `package.json` | `npm ci`, `npm run build` if there's a build script, production `node_modules` |
-| Next.js | `next` in `package.json` | as Node.js; with `output: "standalone"` the standalone server, `.next/static` and `public/` served as static files |
-| Python | `requirements.txt`, `pyproject.toml`, `app.py` or `main.py` | `pip install` into the app (Flask, FastAPI, Django) |
-| Static site | `index.html`, or a `package.json` build that makes `dist/`, `build/` or `out/` | the files, served at `/` |
+| `type` | What odi does |
+|---|---|
+| `go` | `go build` with `CGO_ENABLED=0`: one static executable |
+| `node` | `npm ci`, `npm run build` if there's a build script, production `node_modules` |
+| `nextjs` | as `node`, with `output: "standalone"` in `next.config` |
+| `python` | `pip install` into the app (Flask, FastAPI, Django) |
+| `static` | the files to serve, built first if the project says how |
 
 It writes `NAME.odi` (or `-o FILE`) and prints its digest. Building the
-same commit again gives the same digest: file times come from the commit.
+same commit again gives the same digest.
 
-To change what odi finds:
+Add what odi can't work out to `odi.json`: the start command, the port,
+environment variables, and `include_runtime` to put Node.js itself in the
+file, so the app runs on a machine without it:
 
-- A `Procfile` with a `web:` line sets the web process's command.
-- An `odi.json` in the project is merged into the manifest, so it can set
-  any manifest field: `{"name": "shop", "env": {"required": ["DATABASE_URL"]}}`.
-
-To build for another machine, add `--platform`, for example
-`odi build --platform linux/amd64` on a Mac. Go, Node.js and Next.js
-projects are supported: compiled npm packages are swapped for the target's
-at the lockfile's versions, and a package that only compiles when
-installed (such as `better-sqlite3`) stops the build by name. Python builds
-for the machine it runs on.
-
-Build output odi doesn't know how to build can be packed directly. Lay it
-out in a folder (`app/` for the program, `static/` for files served as
-they are, optionally `runtime/` and `meta/`), write an
-`odi.manifest.json`, and run `odi pack DIR`. The manifest is described in
-the [specification](../SPEC.md#5-manifest).
-
-## Look inside
-
-```sh
-odi inspect shop.odi
-odi verify shop.odi       # every byte checked against the digest
-odi extract shop.odi out/ # unpack it
+```json
+{
+  "name": "shop",
+  "type": "nextjs",
+  "runtime": "node 22",
+  "include_runtime": true,
+  "env": { "NODE_ENV": "production", "DATABASE_URL": "required" }
+}
 ```
+
+Every key is in [the odi.json specification](odi-json.md). To build for
+another machine: `odi build --platform linux/amd64`.
 
 ## Run
 
@@ -68,52 +74,73 @@ odi run shop.odi
 odi run shop.odi --port 3000 -e DATABASE_URL=postgres://localhost/shop
 ```
 
-odi serves the static files itself and sends every other request to the
-`web` process, which gets its port in `PORT`. Each process also gets:
+The app gets its port in `PORT`, the environment variables you give with
+`-e` (odi asks for any it requires), and a scratch folder in `TMPDIR`.
+Ctrl-C stops it and cleans up.
 
-| Variable | Value |
-|---|---|
-| `ODI_ROOT` | where the file's contents are |
-| `ODI_DIGEST` | the file's digest |
-| `TMPDIR` | a scratch folder, removed when it stops |
-
-The contents are read-only. Folders the manifest lists under `writable`
-are writable scratch space.
-
-A command-line tool runs in the terminal with `odi exec`:
+## Look inside
 
 ```sh
-odi exec tool.odi -- --input report.csv
+odi inspect shop.odi      # its processes, runtime, size and digest
 ```
 
-## Publish and run from a registry
+Or `cd` into it. Add one line to your shell's startup file, once:
 
 ```sh
-odi login                       # asks for a token
-odi push acme/shop:1.0.0        # only what the registry doesn't have is sent
+eval "$(odi hook zsh)"     # in ~/.zshrc  (bash: odi hook bash in ~/.bashrc; fish: odi hook fish | source)
+```
+
+Then an ODI file is a folder you can `cd` into:
+
+```sh
+cd shop.odi                # app/, meta/ and the rest
+ls app
+cat app/package.json
+cd shop.odi/app            # straight to a folder inside it
+cd acme/shop:1.0           # a name on the hub too (with a tag)
+odi close                  # let them go when you're done
+```
+
+It's read-only. On Linux the file is mounted and read as you look; on
+macOS it's unpacked once (into `~/.odi/open`). A `cd` to a normal folder
+works exactly as before. Inside, you can start the app yourself too:
+`cd shop.odi/app && node server.js`.
+
+## Publish
+
+```sh
+odi login                       # paste an API key: dev.odisssi.com/dashboard#keys
+odi push acme/shop:1.0.0        # only what the hub doesn't have is sent
 odi push acme/shop --bump patch # later: 1.0.1, and latest moves to it
-odi pull acme/shop:1.0          # the newest 1.0.x, for this machine, checked
-odi run acme/shop               # latest, straight from the registry
+odi versions acme/shop          # what's published
+odi run acme/shop:1.0           # the newest 1.0.x, from anywhere
+odi pull acme/shop:1.0          # or download the file, checked
 ```
 
-On Linux, `odi run NAME` mounts the file and reads it as the program asks
-for it, so a large app starts without downloading all of it. Make it
-faster still by recording what it reads while starting:
+On Linux, `odi run acme/shop:1.0` starts the app before the whole file has
+downloaded: it's read as the app asks for it. More in
+[publishing on the hub](hub.md): versions, ranges and CI.
+
+## Run it where odi isn't installed
+
+`odi bundle` makes one executable that is the app: a small odi with the ODI
+file inside, unchanged. Copy it to a VM, a microVM or a server and run it;
+nothing is installed there:
 
 ```sh
-odi profile shop.odi --path / --path /products   # Linux
-odi push acme/shop:1.0 shop.odi
+odi bundle shop.odi -o shop     # for Linux on this CPU; --platform linux/amd64 for another
+scp shop vm: && ssh vm ./shop   # serves the app, as odi run does
+./shop --odi-file shop.odi      # the ODI file back out, the same digest
 ```
 
-The registry then sends all of that in one request. See
-[publishing on the hub](hub.md) for versions, ranges, rolling back and CI,
-and [registries](registry.md) for `odi fill` and the protocol.
+The bundle runs anything the file carries. For a Node.js app on a machine
+with no Node.js, build it with `"include_runtime": true` in `odi.json`. In
+a microVM, the bundle can be the only thing you add to the disk: start it
+from the guest's init (`exec /shop --port 8080`).
 
 ## Next
 
-- [Parts and sets](sets.md): share one runtime between apps, layer a
-  theme or mod over an app, run services beside it.
-- [Tools for AI agents](agents.md): package a tool and give it to an
-  agent as an MCP server.
-- [Browser apps and games](browser.md).
-- [Signing and trust](signing.md).
+- [Publishing on the hub](hub.md): versions, `--bump`, ranges, CI.
+- [Command reference](cli.md): every command and flag.
+- [TODO.md](../TODO.md): what's coming, and the experimental commands
+  (`odi help --all`) you can try today.

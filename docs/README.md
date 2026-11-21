@@ -7,16 +7,27 @@ about five minutes.
 
 | …do this | Read |
 |---|---|
-| Build my project into an `.odi` file and run it | [Getting started](getting-started.md) |
-| Publish versions, pull them, roll back | [Publishing on the hub](hub.md) |
+| Build my project into an `.odi` file, run it, `cd` into it | [Getting started](getting-started.md) |
+| Run it on a VM or server with nothing installed | [Getting started](getting-started.md#run-it-where-odi-isnt-installed) |
+| Publish versions and pull them | [Publishing on the hub](hub.md) |
 | Look up a command or flag | [Command reference](cli.md), or `odi help COMMAND` |
-| Share one runtime between apps, add themes or mods | [Parts and sets](sets.md) |
-| Give an AI agent a tool (MCP) | [Tools for AI agents](agents.md) |
-| Play a browser game or app from a file, offline too | [Browser apps and games](browser.md) |
-| Sign files and only run what I trust | [Signing and trust](signing.md) |
-| Run my own registry, or make starts faster | [Registries](registry.md) |
+| Set what a project is and how it builds | [odi.json](odi-json.md) |
 | Change settings, folders or environment variables | [Configuration](configuration.md) |
-| Write my own reader, runner or registry | [The format specification](../SPEC.md) |
+
+## Experimental
+
+These work today and may change before they're part of the core (see
+[TODO.md](../TODO.md); `odi help --all` lists their commands):
+
+- [Parts and sets](sets.md): one runtime shared by many apps, themes and
+  mods layered over an app, services beside it.
+- [Tools for AI agents](agents.md): `odi exec`, `odi mcp`, `odi attach`.
+- [Browser apps and games](browser.md): `odi web`, offline play.
+- [Signing and trust](signing.md): `odi key`, `odi sign`, `--trust`.
+- [Registries](registry.md): fast starts (`odi profile`, `odi fill`) and
+  the protocol, for running your own.
+- [The format specification](../SPEC.md): for anyone writing a reader,
+  runner or registry.
 
 ## Words you'll see
 
@@ -30,7 +41,5 @@ about five minutes.
   for example `acme/web:1.4.2`. The default is `https://hub.odisssi.com`.
 - **Tag**: a name for a published build. Versions like `1.4.2` never
   change; tags like `latest` move.
-- **Set**: a tiny ODI file that lists other ODI files (parts) to run
-  together, such as an app plus a shared Node.js runtime.
 
 Maintainers: see [Releasing](RELEASING.md).

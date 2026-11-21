@@ -1,1 +1,1 @@
-{"name": "starseed", "version": "1.0", "platform": {"os": "any", "arch": "any"}}
+{"name": "starseed", "type": "static", "version": "1.0"}

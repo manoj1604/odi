@@ -6,6 +6,65 @@ change commands or the 0.2 draft parts of the format.
 
 ## [Unreleased]
 
+### A small core
+
+- `odi help` shows the few commands most people need: `build`, `run`,
+  `bundle`, `init` (odi.json), `inspect`, `hook` (`cd` into a file),
+  `close`, and `login`,
+  `push`, `pull`, `versions`, `logout`. Every other command works as before
+  and is listed by `odi help --all` as experimental; [TODO.md](TODO.md)
+  says what's planned. The README and the getting-started guide cover the
+  core only.
+
+### odi.json: every project has one
+
+- `odi build` needs an `odi.json` in the project: `name` and `type` (`go`,
+  `node`, `nextjs`, `python`, `static`) are required; the rest is optional:
+  `version`, `repo`, `runtime` ("node 22"), `include_runtime`, `build`,
+  `start`, `port`, `static`, `env` (a default, or "required" /
+  "optional"), and `manifest` (raw manifest fields). A key that isn't in the
+  specification is an error. Specification: docs/odi-json.md; JSON Schema:
+  schema/odi.schema.json.
+- `odi init` writes one from what it finds in the project.
+- `"include_runtime": true` puts Node.js itself in the file: the official
+  release for the target, checked against its published checksums, so the
+  app runs where Node.js isn't installed.
+- The `cd` hook is `odi hook zsh|bash|fish` (it was briefly `odi init`).
+- A Procfile still sets the start command when odi.json doesn't.
+
+### Next.js: the app serves its static files by default
+
+- `odi build` puts `.next/static` and `public/` inside `app/`, where
+  Next.js serves them, so `node server.js` serves the whole site, by hand
+  too. `odi build --static odi` has odi serve them (as before: cached
+  forever, CDN-ready), and keeps the app's copy. A Next.js build's digest
+  changes with this.
+
+### Run without odi installed
+
+- `odi bundle FILE -o OUT`: one executable that is the app, a static odi
+  for the target machine with the ODI file after it, unchanged. Run it on a
+  VM, microVM or server with nothing installed (with `include_runtime`, not
+  even Node.js); `OUT --odi-file F` gets the ODI file back. The runner is this odi when it fits, else the release
+  for the target, checked against its SHA256SUMS.
+
+### Step inside a file
+
+- `cd app.odi`: `odi hook zsh|bash|fish` prints a `cd` for the shell's
+  startup file that goes into `.odi` files (`cd app.odi/app`, and hub names
+  with a tag, `cd acme/web:1.4`), read-only, so `ls`, `cat` and the rest
+  work inside. Mounted on Linux (read as you look), unpacked once elsewhere.
+  `odi close` lets them go.
+- `odi shell FILE|NAME [PATH]` opens a shell inside the file, ready to
+  start the app by hand (`node server.js`): in its folder, with its runtime
+  on PATH, its environment, `PORT` and writable folders, and odi serving its
+  static files on the app's port. Mounted read-only on Linux, a private copy
+  elsewhere. `-- COMMAND` runs one command there instead.
+- `odi login` says where to make a hub API key.
+- An unpacked file is written to disk before it's marked done: a machine
+  that loses power (or a microVM killed) no longer comes back to a broken
+  copy.
+
 ### Publishing on the hub
 
 - `odi push` publishes versions: the one named, the next one

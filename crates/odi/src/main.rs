@@ -2,6 +2,7 @@
 //! program's build output, for any language, that runs anywhere.
 
 mod build;
+mod bundle;
 mod cli;
 mod cross;
 mod flags;
@@ -9,6 +10,8 @@ mod hints;
 mod hub;
 mod keys;
 mod mount;
+mod odijson;
+mod open;
 mod parts;
 mod publish;
 mod run;
@@ -35,8 +38,16 @@ fn main() {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // (A bundle, odi bundle: an app with odi inside, run as itself.)
+    if let Some((f, files)) = bundle::embedded() {
+        if let Err(e) = bundle::run_embedded(f, files, &args) {
+            eprintln!("{}: {e:#}", std::env::args().next().unwrap_or_default());
+            std::process::exit(1);
+        }
+        return;
+    }
     let Some(cmd) = args.first() else {
-        eprint!("{}", cli::overview());
+        eprint!("{}", cli::overview(false));
         std::process::exit(2);
     };
     let rest = &args[1..];
@@ -67,6 +78,13 @@ fn main() {
         "inspect" => cmd_inspect(rest),
         "verify" => cmd_verify(rest),
         "extract" => cmd_extract(rest),
+        "shell" => run::cmd_shell(rest),
+        "init" => build::cmd_init(rest),
+        "hook" => open::cmd_hook(rest),
+        "bundle" => bundle::cmd_bundle(rest),
+        "open" => open::cmd_open(rest),
+        "close" => open::cmd_close(rest),
+        "__mount" => open::cmd_mount_daemon(rest),
         "login" => hub::cmd_login(rest),
         "logout" => hub::cmd_logout(),
         "push" => publish::cmd_push(rest),
@@ -118,12 +136,25 @@ fn version_line() -> String {
 fn cmd_help(args: &[String]) -> Result<()> {
     match args {
         [] => {
-            print!("{}", cli::overview());
+            print!("{}", cli::overview(false));
             Ok(())
         }
-        // (For docs/gen-cli.sh: every command's name.)
+        [a] if a == "--all" => {
+            print!("{}", cli::overview(true));
+            Ok(())
+        }
+        // (For docs/gen-cli.sh: the core commands' names, in odi help's
+        // order; --list-more: the experimental ones.)
         [l] if l == "--list" => {
-            for c in cli::COMMANDS {
+            for (_, names) in cli::CORE {
+                for n in *names {
+                    println!("{n}");
+                }
+            }
+            Ok(())
+        }
+        [l] if l == "--list-more" => {
+            for c in cli::COMMANDS.iter().filter(|c| !cli::is_core(c.name)) {
                 println!("{}", c.name);
             }
             Ok(())
@@ -144,7 +175,7 @@ fn cmd_help(args: &[String]) -> Result<()> {
                 bail!("no command {name:?}{hint}: odi help lists them")
             }
         },
-        _ => bail!("usage: odi help [COMMAND]"),
+        _ => bail!("usage: odi help [COMMAND | --all]"),
     }
 }
 

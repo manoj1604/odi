@@ -220,11 +220,13 @@ pub fn next_routes(stage: &Path) -> Result<Option<RouteMap>> {
                 files.push(rel);
             }
         }
-        // (And the browser's chunks for the page, which odi serves itself:
-        // .next/static/... is static/_next/static/... in the file.)
+        // (And the browser's chunks for the page: .next/static/... is
+        // static/_next/static/... in the file when odi serves them, else
+        // app/.next/static/...)
         for c in client.get(&key).into_iter().flatten() {
-            let rel = format!("static/_next/{c}");
-            if stage.join(&rel).is_file() && seen.insert(rel.clone()) {
+            let rel =
+                [format!("static/_next/{c}"), format!("app/.next/{c}")].into_iter().find(|r| stage.join(r).is_file());
+            if let Some(rel) = rel.filter(|r| seen.insert(r.clone())) {
                 files.push(rel);
             }
         }

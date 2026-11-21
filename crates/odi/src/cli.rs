@@ -36,16 +36,44 @@ const fn c(
 pub const GROUPS: &[&str] =
     &["Build", "Run", "Parts and sets", "Fast starts", "Inspect and trust", "Registry", "This command"];
 
+/// What `odi help` shows: the few commands most people need. The others
+/// work as they always did, listed by `odi help --all` as experimental
+/// (TODO.md: what they're waiting for).
+pub const CORE: &[(&str, &[&str])] = &[
+    ("Build and run", &["init", "build", "run", "bundle"]),
+    ("Look inside", &["inspect", "hook", "close"]),
+    ("Publish on the hub", &["login", "push", "pull", "versions", "logout"]),
+    ("Help", &["help", "version"]),
+];
+
+pub fn is_core(name: &str) -> bool {
+    CORE.iter().any(|(_, names)| names.contains(&name))
+}
+
 pub const COMMANDS: &[Command] = &[
+    c(
+        "init",
+        "Build",
+        &["init [PROJECT] [flags]"],
+        "Write the project's odi.json, from what odi finds in it",
+        "Every project odi builds has an odi.json: its name, its type (go, node, nextjs, python, static) and anything odi can't work out (the runtime, whether to include it, build and start commands, the port, environment variables). odi init writes one with what it finds; edit it as you like. Specification: docs/odi-json.md.",
+        &["odi init", "odi init --type static", "odi init ../shop --name shop"],
+        true,
+    ),
     c(
         "build",
         "Build",
         &["build [PROJECT] [flags]"],
         "Build a project into an ODI file (Go, Node.js, Next.js, Python, static)",
         "Runs the project's own build (go build, npm ci and npm run build, pip) and packs \
-         what it produced, with a manifest that says how to start it. A Procfile's web: line \
-         and an odi.json (any manifest fields) in the project override what odi finds. The same \
-         commit builds to the same digest.\n\n\
+         what it produced, with a manifest that says how to start it. The same commit builds to \
+         the same digest.\n\n\
+         It needs the project's odi.json (odi init writes one): its name and type, and \
+         anything odi can't work out:\n  \
+         {\"name\": \"shop\", \"type\": \"nextjs\", \"runtime\": \"node 22\", \"include_runtime\": true,\n   \
+         \"env\": {\"DATABASE_URL\": \"required\"}}\n\
+         include_runtime puts Node.js itself in the file (the official release for the target, \
+         checked), so it runs where Node.js isn't installed. Every key: docs/odi-json.md.\n\n\
          --platform builds for another machine: Go, Node.js and Next.js swap compiled packages \
          for the target's, at the lockfile's versions; Python builds for this machine.",
         &[
@@ -221,6 +249,33 @@ pub const COMMANDS: &[Command] = &[
         false,
     ),
     c(
+        "bundle",
+        "Run",
+        &["bundle FILE [-o OUT] [--platform OS/ARCH] [--runner FILE]"],
+        "Make one executable that runs the app, with nothing to install where it runs",
+        "Writes a small static odi for the target machine with the ODI file after it, unchanged (the same digest). For a machine with no Node.js, build the app with its runtime inside (\"include_runtime\": true in odi.json). Copy it to a VM, a microVM or a server and run it: it serves the app as odi run would (--port, -e KEY=VALUE). OUT --odi-file app.odi gets the ODI file back out. The runner is this odi when it fits the target, else odi's release for it, checked against its SHA256SUMS.",
+        &["odi bundle app.odi -o app && scp app vm: && ssh vm ./app", "odi bundle app.odi --platform linux/amd64"],
+        true,
+    ),
+    c(
+        "close",
+        "Run",
+        &["close [FILE|NAME]"],
+        "Let go of the files cd went into",
+        "",
+        &["odi close", "odi close app.odi"],
+        false,
+    ),
+    c(
+        "shell",
+        "Run",
+        &["shell FILE|NAME [PATH] [flags] [-- COMMAND...]"],
+        "Open a shell inside it, ready to start it by hand (cd into the file)",
+        "You land in the app's folder (app/) with everything odi run would give it: the file's runtime first on PATH (node, python), its environment, PORT, and its writable folders. odi prints the start command; when the app has static files (Next.js's /_next/static), odi serves them on --port (8080) and passes the rest to the app, as odi run does. On Linux the file is mounted read-only and read as you go (FUSE); elsewhere you get a copy of your own, removed when you exit. ODI_ROOT is the file's top.",
+        &["odi shell app.odi            # then: node server.js, and open http://localhost:8080", "odi shell acme/web:1.4 -e DATABASE_URL=postgres://localhost/web", "odi shell app.odi static     # look around the static files", "odi shell app.odi -- node -e 'console.log(process.version)'"],
+        true,
+    ),
+    c(
         "key",
         "Inspect and trust",
         &["key new [NAME]", "key ls"],
@@ -341,6 +396,19 @@ pub const COMMANDS: &[Command] = &[
         false,
     ),
     c(
+        "hook",
+        "This command",
+        &["hook zsh|bash|fish"],
+        "Set up cd into .odi files: cd app.odi (add its line to your shell)",
+        "Add it to your shell's startup file:\n  \
+         zsh:  eval \"$(odi hook zsh)\"    (in ~/.zshrc)\n  \
+         bash: eval \"$(odi hook bash)\"   (in ~/.bashrc)\n  \
+         fish: odi hook fish | source       (in ~/.config/fish/config.fish)\n\
+         Then cd app.odi, cd app.odi/app or cd acme/web:1.4 (a hub name with a tag) goes inside, read-only, and ls, cat and the rest work as usual. On Linux the file is mounted and read as you look (FUSE); elsewhere it's unpacked once under ~/.odi/open. odi close lets them go. A cd to a folder works as it always did.",
+        &["odi hook zsh"],
+        false,
+    ),
+    c(
         "completions",
         "This command",
         &["completions bash|zsh|fish"],
@@ -360,21 +428,36 @@ pub fn find(name: &str) -> Option<&'static Command> {
 }
 
 /// `odi help`: the commands, by group.
-pub fn overview() -> String {
+pub fn overview(all: bool) -> String {
     let mut s = format!(
         "odi {}: one file for a program's build output, any language, runs anywhere\n\n\
          Usage: odi COMMAND [ARGUMENTS] [FLAGS]\n",
         crate::VERSION
     );
-    for g in GROUPS {
+    for (g, names) in CORE {
         s.push_str(&format!("\n{g}:\n"));
-        for c in COMMANDS.iter().filter(|c| c.group == *g) {
+        for c in names.iter().filter_map(|n| find(n)) {
             s.push_str(&format!("  {:<13}{}\n", c.name, c.about));
         }
     }
-    s.push_str(&format!(
-        "\nRun 'odi help COMMAND' (or odi COMMAND --help) for its flags and examples.\nDocs: {DOCS}\n"
-    ));
+    if all {
+        s.push_str("\nExperimental (they work, and may change before they're in this list; see TODO.md):\n");
+        for g in GROUPS {
+            let more: Vec<&Command> = COMMANDS.iter().filter(|c| c.group == *g && !is_core(c.name)).collect();
+            if more.is_empty() {
+                continue;
+            }
+            s.push_str(&format!("\n{g}:\n"));
+            for c in more {
+                s.push_str(&format!("  {:<13}{}\n", c.name, c.about));
+            }
+        }
+    }
+    s.push_str("\nRun 'odi help COMMAND' (or odi COMMAND --help) for its flags and examples.\n");
+    if !all {
+        s.push_str("More commands, experimental: odi help --all\n");
+    }
+    s.push_str(&format!("Docs: {DOCS}\n"));
     s
 }
 
@@ -401,6 +484,7 @@ fn metavar(c: &Command, sp: &Spec) -> String {
         "runtime" | "overlay" => "PART",
         "part" if c.name == "set" => "NAME=PART",
         "trust" => "KEY",
+        "static" => "app|odi",
         "key" if c.name == "verify" => "KEY",
         "compress" => "LEVEL",
         "registry" => "URL",
@@ -484,20 +568,22 @@ fn wrap(text: &str, width: usize) -> String {
 }
 
 /// The closest command name, for a mistyped one.
-pub fn suggest(name: &str) -> Option<&'static str> {
-    fn dist(a: &str, b: &str) -> usize {
-        let b: Vec<char> = b.chars().collect();
-        let mut prev: Vec<usize> = (0..=b.len()).collect();
-        for (i, ca) in a.chars().enumerate() {
-            let mut cur = vec![i + 1];
-            for (j, cb) in b.iter().enumerate() {
-                cur.push((prev[j] + usize::from(ca != *cb)).min(prev[j + 1] + 1).min(cur[j] + 1));
-            }
-            prev = cur;
+/// How many letters apart two words are (Levenshtein).
+pub fn distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            cur.push((prev[j] + usize::from(ca != *cb)).min(prev[j + 1] + 1).min(cur[j] + 1));
         }
-        prev[b.len()]
+        prev = cur;
     }
-    COMMANDS.iter().map(|c| (dist(name, c.name), c.name)).filter(|(d, _)| *d <= 2).min().map(|(_, n)| n)
+    prev[b.len()]
+}
+
+pub fn suggest(name: &str) -> Option<&'static str> {
+    COMMANDS.iter().map(|c| (distance(name, c.name), c.name)).filter(|(d, _)| *d <= 2).min().map(|(_, n)| n)
 }
 
 /// Shell completion: commands, and the words some take next.
@@ -567,8 +653,16 @@ mod tests {
             assert!(c.usage.iter().all(|u| u.starts_with(c.name)), "{}: usage", c.name);
             assert!(!c.examples.is_empty() && c.examples.iter().all(|e| e.starts_with(&format!("odi {}", c.name))));
         }
-        let o = overview();
-        assert!(COMMANDS.iter().all(|c| o.contains(c.name)));
+        let all = overview(true);
+        assert!(
+            COMMANDS.iter().all(|c| all.contains(&format!("  {:<13}", c.name))),
+            "odi help --all lists every command"
+        );
+        let core = overview(false);
+        for (_, names) in CORE {
+            assert!(names.iter().all(|n| find(n).is_some()), "a core command that doesn't exist");
+        }
+        assert!(!core.contains("  attach "), "odi help shows only the core");
     }
 
     #[test]

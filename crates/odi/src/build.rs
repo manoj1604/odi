@@ -3,7 +3,8 @@
 //!
 //! - Go: go.mod: a static executable (CGO_ENABLED=0) for --platform
 //! - Next.js: package.json with next: npm run build, .next/standalone in
-//!   app/, .next/static and public/ in static/
+//!   app/ with .next/static and public/ (--static odi: also in static/,
+//!   served by odi)
 //! - static: package.json whose build makes dist/ (or build/, out/) with
 //!   index.html and no start script; or index.html at the top
 //! - Node.js: package.json: the project and its production dependencies
@@ -11,8 +12,9 @@
 //! - Python: requirements.txt, pyproject.toml or a main file: the project
 //!   and its packages (pip install --target app/.packages)
 //!
-//! A Procfile's web line, and odi.json in the project (any manifest fields),
-//! override what was found. The build time is the last commit's (or
+//! A Procfile's web line, and odi.json in the project (src/odijson.rs: the
+//! runtime, whether to include it, the build and start commands, the port,
+//! environment variables, and any manifest field), override what was found. The build time is the last commit's (or
 //! SOURCE_DATE_EPOCH), so the same commit builds to the same digest.
 
 use std::collections::{BTreeMap, HashSet};
@@ -26,6 +28,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::flags::{self, flag, Kind::*};
+use crate::odijson::{self, Kind, OdiJson};
 use crate::{copy_one, copy_tree, exists, host_arch, host_os, pack, walk, Step, VERSION};
 
 pub struct Project {
@@ -34,12 +37,17 @@ pub struct Project {
     pub goos: String,
     pub goarch: String,
     pub build: bool,
+    /// Next.js: odi serves .next/static and public/ (--static odi), not the
+    /// app.
+    pub odi_static: bool,
+    /// The project's odi.json.
+    pub file: OdiJson,
     pub m: Manifest,
 }
 
 pub fn cmd_build(args: &[String]) -> Result<()> {
     const U: &str =
-        "odi build [PROJECT] [-o FILE] [--platform OS/ARCH] [--no-build] [--runtime PART] [--compress max] [--profile [--path /]... [-e KEY=VALUE]...]";
+        "odi build [PROJECT] [-o FILE] [--platform OS/ARCH] [--no-build] [--runtime PART] [--static app|odi] [--compress max] [--profile [--path /]... [-e KEY=VALUE]...]";
     let specs = [
         flag("o", Value, "the ODI file (default: NAME.odi)"),
         flag("platform", Value, "OS/ARCH to build for (Go, Node.js, Next.js; Python: this machine's)"),
@@ -51,6 +59,11 @@ pub fn cmd_build(args: &[String]) -> Result<()> {
         flag("use-path-runtime", Bool, "with --profile: run a runtime pinned by digest with this machine's"),
         flag("runtime", Value, "a runtime part (file or registry name) to pin, by digest and exact version"),
         flag("compress", Value, "default, or max (zstd 19: about 10% smaller, as fast to read)"),
+        flag(
+            "static",
+            Value,
+            "Next.js: who serves .next/static and public/: app (default) or odi (cached forever, CDN-ready)",
+        ),
     ];
     let (f, pos) = flags::parse(&specs, args, U)?;
     if pos.len() > 1 {
@@ -60,6 +73,11 @@ pub fn cmd_build(args: &[String]) -> Result<()> {
     let dir = std::path::absolute(pos.first().map(String::as_str).unwrap_or("."))?;
     let plat = f.str("platform").map(String::from).unwrap_or_else(|| format!("{}/{}", host_os(), host_arch()));
     let Some((goos, goarch)) = plat.split_once('/') else { bail!("--platform: OS/ARCH, e.g. linux/amd64") };
+    let odi_static = match f.str("static") {
+        None | Some("app") => false,
+        Some("odi") => true,
+        Some(o) => bail!("--static {o}: app or odi"),
+    };
     let stage = tempfile::Builder::new().prefix("odi-build-").tempdir()?;
     let base = dir.file_name().and_then(|n| n.to_str()).unwrap_or("app");
     let mut p = Project {
@@ -68,26 +86,47 @@ pub fn cmd_build(args: &[String]) -> Result<()> {
         goos: goos.into(),
         goarch: goarch.into(),
         build: !f.bool("no-build"),
+        odi_static,
+        file: OdiJson::load(&dir)?,
         m: Manifest { odi: "0.1".into(), name: safe_name(base), ..Default::default() },
     };
 
-    let kind = if exists(&dir, "go.mod") {
-        p.build_go()?;
-        "Go".to_string()
-    } else if exists(&dir, "package.json") {
-        p.build_node()?
-    } else if ["requirements.txt", "pyproject.toml", "app.py", "main.py"].iter().any(|f| exists(&dir, f)) {
-        p.build_python()?;
-        "Python".into()
-    } else if exists(&dir, "index.html") {
-        p.build_static(&dir)?;
-        "static site".into()
-    } else {
-        bail!("no project here odi knows (go.mod, package.json, requirements.txt, pyproject.toml, index.html); pack a laid-out folder with odi pack");
+    let t = p.file.kind.as_str();
+    let need = |files: &[&str]| -> Result<()> {
+        if files.iter().any(|f| exists(&dir, f)) {
+            Ok(())
+        } else {
+            bail!("odi.json says \"type\": \"{t}\", but there's no {} here", files.join(" or "))
+        }
+    };
+    let kind = match p.file.kind {
+        Kind::Go => {
+            need(&["go.mod"])?;
+            p.pre_build()?;
+            p.build_go()?;
+            "Go".to_string()
+        }
+        Kind::Node | Kind::Nextjs => {
+            need(&["package.json"])?;
+            p.build_node()?
+        }
+        Kind::Python => {
+            need(&["requirements.txt", "pyproject.toml", "app.py", "main.py"])?;
+            p.pre_build()?;
+            p.build_python()?;
+            "Python".into()
+        }
+        Kind::Static => p.build_static_project()?,
     };
     p.procfile()?;
     p.overrides()?;
     p.build_info();
+    if p.file.include_runtime {
+        if f.str("runtime").is_some() {
+            bail!("odi.json's include_runtime and --runtime both say where the runtime comes from: one of them");
+        }
+        p.include_runtime()?;
+    }
     if let Some(r) = f.str("runtime") {
         p.pin_runtime(r)?;
     }
@@ -108,6 +147,91 @@ pub fn cmd_build(args: &[String]) -> Result<()> {
         eprintln!("== profiling");
         crate::run::profile(&out, &out, f.all("path"), &crate::run::RunOpts::from_flags(&f)?)?;
     }
+    Ok(())
+}
+
+/// odi init: an odi.json for the project here, from what odi finds in it
+/// (docs/odi-json.md).
+pub fn cmd_init(args: &[String]) -> Result<()> {
+    const U: &str = "odi init [PROJECT] [--type go|node|nextjs|python|static] [--name NAME]";
+    let specs = [
+        flag("type", Value, "what kind of project, when odi can't tell"),
+        flag("name", Value, "the app's name (default: package.json's, go.mod's, or the folder's)"),
+    ];
+    let (f, pos) = flags::parse(&specs, args, U)?;
+    if pos.len() > 1 {
+        bail!("usage: {U}");
+    }
+    let dir = std::path::absolute(pos.first().map(String::as_str).unwrap_or("."))?;
+    let path = dir.join("odi.json");
+    if path.exists() {
+        bail!("{} has one already: edit it (docs/odi-json.md)", path.display());
+    }
+    let pkg: Option<PackageJson> = fs::read(dir.join("package.json"))
+        .ok()
+        .map(|b| serde_json::from_slice(&b))
+        .transpose()
+        .context("package.json")?;
+    let kind = match f.str("type") {
+        Some(t) => Kind::parse(t).ok_or_else(|| anyhow!("--type {t}: go, node, nextjs, python or static"))?,
+        None if exists(&dir, "go.mod") => Kind::Go,
+        None if pkg.as_ref().is_some_and(|p| p.dependencies.contains_key("next")) => Kind::Nextjs,
+        None if pkg.as_ref().is_some_and(|p| {
+            !p.scripts.contains_key("start") && p.main.is_empty() && p.scripts.contains_key("build")
+        }) =>
+        {
+            Kind::Static
+        }
+        None if pkg.is_some() => Kind::Node,
+        None if ["requirements.txt", "pyproject.toml", "app.py", "main.py"].iter().any(|f| exists(&dir, f)) => {
+            Kind::Python
+        }
+        None if exists(&dir, "index.html") => Kind::Static,
+        None => bail!("odi can't tell what kind of project this is: odi init --type go|node|nextjs|python|static"),
+    };
+    let base = dir.file_name().and_then(|n| n.to_str()).unwrap_or("app");
+    let name = match f.str("name") {
+        Some(n) => n.to_string(),
+        None => match &pkg {
+            Some(p) if !p.name.is_empty() => safe_name(&p.name),
+            _ if kind == Kind::Go => {
+                let m = output(&dir, "go", &["list", "-m"]);
+                safe_name(m.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(base))
+            }
+            _ => safe_name(base),
+        },
+    };
+    let mut lines = vec![
+        format!("  \"$schema\": {}", serde_json::to_string(odijson::SCHEMA)?),
+        format!("  \"name\": {}", serde_json::to_string(&name)?),
+        format!("  \"type\": \"{}\"", kind.as_str()),
+    ];
+    if kind.runtime() == Some("node") {
+        let p = Project {
+            dir: dir.clone(),
+            stage: dir.clone(),
+            goos: host_os().into(),
+            goarch: host_arch().into(),
+            build: false,
+            odi_static: false,
+            file: OdiJson::new(&name, kind),
+            m: Manifest::default(),
+        };
+        let v = p.node_version(pkg.as_ref().expect("a node project has package.json"));
+        let major: String =
+            v.trim_start_matches(['^', '~', '>', '=', 'v', ' ']).chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !major.is_empty() {
+            lines.push(format!("  \"runtime\": \"node {major}\""));
+        }
+    }
+    let text = format!("{{\n{}\n}}\n", lines.join(",\n"));
+    OdiJson::parse(text.as_bytes()).context("the odi.json odi init made")?;
+    fs::write(&path, &text)?;
+    print!("{}:\n{text}", path.display());
+    if kind == Kind::Nextjs {
+        eprintln!("(Next.js: set output: \"standalone\" in next.config, which odi builds from.)");
+    }
+    eprintln!("Then: odi build. Every key: https://github.com/manoj1604/odi/blob/main/docs/odi-json.md");
     Ok(())
 }
 
@@ -245,28 +369,19 @@ impl Project {
         }
         self.m.language = Some(Language { name: "node".into(), framework: String::new() });
         self.m.runtime = Some(Runtime { name: "node".into(), version: self.node_version(&pkg), ..Default::default() });
-        let installed = exists(&self.dir, "node_modules");
-        let script = |s: &str| pkg.scripts.get(s).map(String::as_str).unwrap_or("");
-        if self.build && !script("build").is_empty() {
-            if !installed {
-                npm_install(&self.dir, false)?;
+        let next = pkg.dependencies.contains_key("next");
+        match self.file.kind {
+            Kind::Node if next => bail!("odi.json: this project depends on next: \"type\": \"nextjs\""),
+            Kind::Nextjs if !next => {
+                bail!("odi.json says \"type\": \"nextjs\", but package.json doesn't depend on next")
             }
-            run(&self.dir, &[], "npm", &["run", "build"])?;
+            _ => {}
         }
-        if pkg.dependencies.contains_key("next") {
+        self.npm_build(&pkg)?;
+        let script = |s: &str| pkg.scripts.get(s).map(String::as_str).unwrap_or("");
+        if next {
             self.nextjs()?;
             return Ok("Next.js".into());
-        }
-        if script("start").is_empty() && pkg.main.is_empty() {
-            for out in ["dist", "build", "out"] {
-                let d = self.dir.join(out);
-                if exists(&d, "index.html") {
-                    self.m.runtime = None;
-                    self.m.language = Some(Language { name: "static".into(), framework: String::new() });
-                    self.build_static(&d)?;
-                    return Ok(format!("static site ({out}/)"));
-                }
-            }
         }
         let app = self.stage.join("app");
         copy_project(&self.dir, &app, &[])?;
@@ -290,7 +405,74 @@ impl Project {
         Ok("Node.js".into())
     }
 
+    /// odi.json's build command, for a project odi builds without npm.
+    fn pre_build(&self) -> Result<()> {
+        match self.file.build.as_deref() {
+            Some(cmd) if self.build && !cmd.is_empty() => run(&self.dir, &[], "sh", &["-c", cmd]),
+            _ => Ok(()),
+        }
+    }
+
+    /// npm ci (when there's no node_modules) and the build: odi.json's
+    /// command, else the build script ("" builds nothing).
+    fn npm_build(&self, pkg: &PackageJson) -> Result<()> {
+        if !self.build {
+            return Ok(());
+        }
+        let cmd = match self.file.build.as_deref() {
+            Some("") => return Ok(()),
+            Some(c) => c.to_string(),
+            None if pkg.scripts.contains_key("build") => "npm run build".into(),
+            None => return Ok(()),
+        };
+        if !exists(&self.dir, "node_modules") && !pkg.dependencies.is_empty() {
+            npm_install(&self.dir, false)?;
+        }
+        if cmd == "npm run build" {
+            run(&self.dir, &[], "npm", &["run", "build"])
+        } else {
+            run(&self.dir, &[], "sh", &["-c", &cmd])
+        }
+    }
+
+    /// A static project: built if it says how (or has a package.json build
+    /// script), then its folder served.
+    fn build_static_project(&mut self) -> Result<String> {
+        if exists(&self.dir, "package.json") {
+            let b = fs::read(self.dir.join("package.json")).unwrap_or_default();
+            let pkg: PackageJson = serde_json::from_slice(&b).context("package.json")?;
+            self.npm_build(&pkg)?;
+        } else {
+            self.pre_build()?;
+        }
+        let folder = match &self.file.r#static {
+            Some(f) => {
+                let d = self.dir.join(f);
+                if !d.is_dir() {
+                    bail!("odi.json: \"static\": {f}: no such folder (after the build)");
+                }
+                d
+            }
+            None => ["dist", "build", "out"]
+                .iter()
+                .map(|f| self.dir.join(f))
+                .find(|d| exists(d, "index.html"))
+                .unwrap_or_else(|| self.dir.clone()),
+        };
+        self.build_static(&folder)?;
+        let shown = folder.strip_prefix(&self.dir).ok().map(|p| p.display().to_string()).filter(|p| !p.is_empty());
+        Ok(match shown {
+            Some(p) => format!("static site ({p}/)"),
+            None => "static site".into(),
+        })
+    }
+
     fn node_version(&self, pkg: &PackageJson) -> String {
+        if let Some((n, v)) = &self.file.runtime {
+            if n == "node" && !v.is_empty() {
+                return v.clone();
+            }
+        }
         for f in [".nvmrc", ".node-version"] {
             let v = read_file(&self.dir.join(f));
             let v = v.trim();
@@ -316,19 +498,28 @@ impl Project {
             );
         }
         copy_tree(&sa, &self.stage.join("app"))?;
+        // .next/static and public/ in the app, where Next.js serves them from:
+        // `node server.js` serves the whole site, in odi run or by hand. With
+        // --static odi, also in static/, served by odi run itself (cached
+        // forever; a host can put them on a CDN). Identical files are kept
+        // once in an ODI file, so the second copy costs next to nothing.
         if exists(&self.dir, ".next/static") {
-            copy_tree(&self.dir.join(".next/static"), &self.stage.join("static/_next/static"))?;
-            self.m.r#static.push(Static {
-                from: "static/_next/static".into(),
-                at: "/_next/static".into(),
-                immutable: true,
-            });
+            copy_tree(&self.dir.join(".next/static"), &self.stage.join("app/.next/static"))?;
+            if self.odi_static {
+                copy_tree(&self.dir.join(".next/static"), &self.stage.join("static/_next/static"))?;
+                self.m.r#static.push(Static {
+                    from: "static/_next/static".into(),
+                    at: "/_next/static".into(),
+                    immutable: true,
+                });
+            }
         }
         if exists(&self.dir, "public") {
-            copy_tree(&self.dir.join("public"), &self.stage.join("static/public"))?;
-            self.m.r#static.push(Static { from: "static/public".into(), at: "/".into(), immutable: false });
-            // (and in the app too: its image optimizer reads originals from its own server)
             copy_tree(&self.dir.join("public"), &self.stage.join("app/public"))?;
+            if self.odi_static {
+                copy_tree(&self.dir.join("public"), &self.stage.join("static/public"))?;
+                self.m.r#static.push(Static { from: "static/public".into(), at: "/".into(), immutable: false });
+            }
         }
         if let Some(l) = &mut self.m.language {
             l.framework = "nextjs".into();
@@ -448,15 +639,76 @@ impl Project {
     /// odi.json in the project, any manifest fields, over what was found
     /// (objects merged, the rest replaced; null removes).
     fn overrides(&mut self) -> Result<()> {
-        let Ok(b) = fs::read(self.dir.join("odi.json")) else { return Ok(()) };
-        let mut over: Value = serde_json::from_slice(&b).context("odi.json")?;
-        // ("repo" is where odi push publishes, not part of the manifest.)
-        if let Value::Object(o) = &mut over {
-            o.remove("repo");
+        // Manifest fields, merged in as they are ("repo" is where odi push
+        // publishes, not part of the manifest).
+        self.m.name = self.file.name.clone();
+        if let Some(v) = &self.file.version {
+            self.m.version = v.clone();
         }
         let mut cur = serde_json::to_value(&self.m)?;
-        merge(&mut cur, over);
-        self.m = serde_json::from_value(cur).context("odi.json")?;
+        merge(&mut cur, Value::Object(self.file.manifest.clone()));
+        self.m = serde_json::from_value(cur).context("odi.json's manifest")?;
+
+        // Then the plain keys.
+        if let Some((name, version)) = self.file.runtime.clone() {
+            let rt = self.m.runtime.get_or_insert_with(Runtime::default);
+            if !rt.name.is_empty() && rt.name != name {
+                bail!("odi.json: \"runtime\": {name}, but this is a {} project", rt.name);
+            }
+            rt.name = name;
+            if !version.is_empty() {
+                rt.version = version;
+            }
+        }
+        if let Some(cmd) = self.file.start.clone() {
+            let command = odijson::command(&cmd);
+            match self.m.processes.iter_mut().find(|p| p.name == "web") {
+                Some(w) => w.command = command,
+                None => self.m.processes.insert(0, web(command, 3000)),
+            }
+        }
+        if let Some(port) = self.file.port {
+            let Some(w) = self.m.processes.iter_mut().find(|p| p.name == "web") else {
+                bail!("odi.json: \"port\", but nothing to start: add \"start\"");
+            };
+            w.port = Some(Port::http(port));
+        }
+        if !self.file.env.is_empty() {
+            let env = self.m.env.get_or_insert_with(Env::default);
+            for (k, v) in &self.file.env {
+                env.required.retain(|x| x != k);
+                env.optional.retain(|x| x != k);
+                env.defaults.remove(k);
+                match v.as_str() {
+                    "required" => env.required.push(k.clone()),
+                    "optional" => env.optional.push(k.clone()),
+                    _ => {
+                        env.defaults.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// odi.json's include_runtime: the runtime in the file itself (runtime/),
+    /// the official release for the target, checked against its published
+    /// checksums. Node.js for now.
+    fn include_runtime(&mut self) -> Result<()> {
+        let Some(rt) = self.m.runtime.clone().filter(|r| r.name == "node") else {
+            bail!("odi.json: include_runtime: odi can put Node.js in a file for now");
+        };
+        let v = crate::parts::node_exact(&rt.version)?;
+        let plat = format!("{}/{}", self.goos, self.goarch);
+        eprintln!("== runtime: node {v} for {plat}, in the file");
+        crate::parts::node_release(&v, &plat, &self.stage.join("runtime"))?;
+        let r = self.m.runtime.as_mut().expect("checked");
+        r.version = v;
+        r.included = true;
+        r.digest.clear();
+        // (nodejs.org's Linux builds are for glibc.)
+        let libc = if self.goos == "linux" { "gnu" } else { "" };
+        self.m.platform = Some(Platform { os: self.goos.clone(), arch: self.goarch.clone(), libc: libc.into() });
         Ok(())
     }
 

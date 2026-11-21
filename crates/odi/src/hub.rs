@@ -24,6 +24,8 @@ use crate::flags::{self, flag, Kind::*};
 use crate::{host_arch, host_os, human};
 
 const DEFAULT_REGISTRY: &str = "https://hub.odisssi.com";
+/// Where the hub's API keys are made.
+const KEYS_URL: &str = "https://dev.odisssi.com/dashboard#keys";
 
 /// The largest README a repository's page shows.
 const MAX_README: u64 = 256 << 10;
@@ -302,6 +304,10 @@ pub fn cmd_login(args: &[String]) -> Result<()> {
         return Ok(());
     }
     if token.is_empty() {
+        let hub = c.registry.is_empty() || c.registry.trim_end_matches('/') == DEFAULT_REGISTRY;
+        if hub && std::io::IsTerminal::is_terminal(&io::stdin()) {
+            eprintln!("Paste an API key from {KEYS_URL} (no account yet? sign up there first).");
+        }
         token = ask_token()?;
     }
     if token.is_empty() {

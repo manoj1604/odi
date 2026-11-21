@@ -27,10 +27,9 @@ needs.
 
 ## A project's odi.json
 
-`odi build` merges a project's `odi.json` into the manifest, so it can set
-any manifest field (`name`, `version`, `env`, `processes`…). One more key
-isn't part of the manifest: `"repo": "acme/web"`, the repository `odi push`
-and `odi versions` use when no name is given ([publishing](hub.md)).
+Every project `odi build` builds has an `odi.json`: its name, its type, and
+anything odi can't work out. `odi init` writes one. Its keys, defaults and
+rules are in [the odi.json specification](odi-json.md).
 
 ## Environment variables
 

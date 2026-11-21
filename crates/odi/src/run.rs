@@ -62,6 +62,24 @@ pub fn cmd_run(args: &[String]) -> Result<()> {
     run_app(&app, &opts, None).map(|_| ())
 }
 
+/// Runs a file already open (a bundle's: odi bundle), with odi run's flags.
+pub fn run_reader(rd: Reader, args: &[String], usage: &str) -> Result<()> {
+    let specs = [
+        flag("trust", Multi, "run it only if this key signed it (repeat; also ~/.odi/trust, $ODI_TRUST)"),
+        flag("port", Value, "the port to serve on (default: web's default, else 8080)"),
+        flag("e", Multi, "KEY=VALUE for the program (repeat)"),
+        flag("use-path-runtime", Bool, "run a runtime pinned by digest with this machine's, unchecked"),
+    ];
+    let (f, pos) = flags::parse(&specs, args, usage)?;
+    if !pos.is_empty() {
+        bail!("usage: {usage}");
+    }
+    let opts = RunOpts::from_flags(&f)?;
+    crate::keys::check_trusted(&rd, f.all("trust"))?;
+    let app = parts::assemble(rd, None)?;
+    run_app(&app, &opts, None).map(|_| ())
+}
+
 /// odi profile: runs a file (mounted, Linux), asks it for some paths, and
 /// keeps what it read, in order, as its start list (meta/odi/start.json): a
 /// runner fetching it from a registry then gets all of it in one batch.
@@ -232,6 +250,9 @@ pub struct RunOpts {
     path_runtime: bool,
     /// Keys a part added while running must be signed by (with the runner's).
     trust: Vec<String>,
+    /// For odi shell: mounted even from a local file (Linux), else a copy of
+    /// its own (never the shared unpacked cache, which someone could change).
+    shell: bool,
 }
 
 impl RunOpts {
@@ -241,6 +262,7 @@ impl RunOpts {
             envs: f.all("e").to_vec(),
             path_runtime: f.bool("use-path-runtime"),
             trust: f.all("trust").to_vec(),
+            shell: false,
         })
     }
 }
@@ -298,15 +320,21 @@ fn prepare(app: &Assembled, opts: &RunOpts, record: bool) -> Result<Prepared> {
     }
 
     let mut mounted = None;
-    if remote.is_some() || record {
+    if remote.is_some() || record || opts.shell {
         match crate::mount::mount_lazy(rd.clone(), &tmp.path().join(".writable"), remote.clone(), record, warm) {
             Ok(mnt) => mounted = Some(mnt),
             Err(e) if record => return Err(e.context("profiling reads the file mounted (Linux, FUSE)")),
+            Err(_) if remote.is_none() => {}
             Err(e) => eprintln!("odi: getting the whole file ({e:#})"),
         }
     }
     let root = match &mounted {
         Some(mnt) => mnt.dir.clone(),
+        None if opts.shell => {
+            let r = tmp.path().join("root");
+            crate::extract(&rd, &r)?;
+            r
+        }
         None => unpack_cached(&rd, &app.key)?,
     };
 
@@ -532,7 +560,11 @@ fn run_app(app: &Assembled, opts: &RunOpts, profile: Option<Vec<String>>) -> Res
     let site = (!m.r#static.is_empty()).then(|| Site {
         root: root.clone(),
         statics: m.r#static.clone(),
-        web: web.map(|_| Web { port: web_port, client: Client::builder(TokioExecutor::new()).build_http() }),
+        web: web.map(|_| Web {
+            port: web_port,
+            client: Client::builder(TokioExecutor::new()).build_http(),
+            not_up: None,
+        }),
         routes: prep.routes.clone(),
     });
     let health = web.and_then(|w| w.health.as_ref()).map(|h| h.path.clone());
@@ -547,6 +579,126 @@ fn run_app(app: &Assembled, opts: &RunOpts, profile: Option<Vec<String>>) -> Res
     prep.say_fetched();
     drop(prep);
     r.map(|_| reads)
+}
+
+/// A path inside a file as its index writes it: no leading `/` or `./`, no
+/// trailing `/`; the top is "".
+fn clean_path(p: &str) -> String {
+    p.split('/').filter(|s| !s.is_empty() && *s != ".").collect::<Vec<_>>().join("/")
+}
+
+/// odi shell: a shell inside a file, ready to start it by hand: in the web
+/// process's folder (app/), with the file's runtime on PATH, its environment,
+/// PORT, and its writable folders. When it has static files, odi serves them
+/// on --port (8080) and passes everything else to PORT, as odi run does.
+pub fn cmd_shell(args: &[String]) -> Result<()> {
+    const U: &str = "odi shell FILE|NAME [PATH] [--port 8080] [-e KEY=VALUE]... [--use-path-runtime] [-- COMMAND...]";
+    let (args, cmd) = match args.iter().position(|a| a == "--") {
+        Some(i) => (&args[..i], args[i + 1..].to_vec()),
+        None => (args, Vec::new()),
+    };
+    let specs = [
+        flag("port", Value, "where odi serves the app's static files (default: the app's port, else 8080)"),
+        flag("e", Multi, "KEY=VALUE for the app (repeat)"),
+        flag("use-path-runtime", Bool, "use this machine's runtime for one pinned by digest, unchecked"),
+    ];
+    let (f, pos) = flags::parse(&specs, args, U)?;
+    if pos.is_empty() || pos.len() > 2 {
+        bail!("usage: {U}");
+    }
+    let src = &pos[0];
+    let mut opts = RunOpts::from_flags(&f)?;
+    opts.shell = true;
+    let (rd, remote) = crate::hub::open_any(src)?;
+    let app = parts::assemble(rd, remote)?;
+    let prep = prepare(&app, &opts, false)?;
+    let m = &prep.m;
+
+    let web = m.processes.iter().find(|p| p.name == "web");
+    let port = match opts.port {
+        Some(p) if p != 0 => p,
+        _ => web.and_then(|w| w.port.as_ref()).map(|p| p.default).filter(|d| *d != 0).unwrap_or(8080),
+    };
+    let port = u16::try_from(port).map_err(|_| anyhow!("--port {port}: not a port"))?;
+    let front = web.is_some() && !m.r#static.is_empty();
+    let web_port = if front { free_port()? } else { port };
+
+    let mut env = prep.env(m.env.as_ref(), &[]);
+    if let Some(p) = web.and_then(|w| w.port.as_ref()) {
+        env.push((or_default(&p.env, "PORT").into(), web_port.to_string().into()));
+    } else if web.is_some() {
+        env.push(("PORT".into(), web_port.to_string().into()));
+    }
+    env.push(("ODI_SHELL".into(), src.into()));
+
+    let sub = clean_path(pos.get(1).map(String::as_str).unwrap_or(""));
+    let cwd = if !sub.is_empty() {
+        prep.root.join(&sub)
+    } else {
+        match web.or(m.processes.first()) {
+            Some(p) => prep.root.join(or_default(&p.workdir, "app")),
+            None => prep.root.clone(),
+        }
+    };
+    if !cwd.is_dir() {
+        bail!("{}: no such folder in the file", if sub.is_empty() { "app" } else { &sub });
+    }
+
+    // (odi's front: the static files, and the rest passed to the app on PORT)
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
+    if front {
+        let site = Arc::new(Site {
+            root: prep.root.clone(),
+            statics: m.r#static.clone(),
+            web: Some(Web {
+                port: web_port,
+                client: Client::builder(TokioExecutor::new()).build_http(),
+                not_up: web.map(|w| {
+                    format!("502: the app isn't running yet. Start it in the odi shell: {}\n", w.command.join(" "))
+                }),
+            }),
+            routes: prep.routes.clone(),
+        });
+        rt.block_on(async { tokio::net::TcpListener::bind(("127.0.0.1", port)).await.map(drop) })
+            .with_context(|| format!("port {port} is taken: --port"))?;
+        rt.spawn(async move {
+            if let Err(e) = serve(site, port).await {
+                eprintln!("odi: {e:#}");
+            }
+        });
+    }
+
+    if cmd.is_empty() {
+        let how = if prep.mounted.is_some() { "read-only" } else { "a copy, removed when you exit" };
+        let w: Vec<&str> = m.writable.iter().map(String::as_str).collect();
+        let writable = if w.is_empty() { String::new() } else { format!("; writable: {}", w.join(", ")) };
+        eprintln!("odi: in {src} ({how}{writable}). exit to leave.");
+        if let Some(w) = web {
+            eprintln!("odi: start it with:  {}", w.command.join(" "));
+            if front {
+                eprintln!("odi: then open http://localhost:{port}  (odi serves the static files there, and passes the rest to the app on PORT={web_port})");
+            } else {
+                eprintln!("odi: then open http://localhost:{port}");
+            }
+        }
+    }
+    let (prog, rest) = match cmd.split_first() {
+        Some((p, r)) => (p.clone(), r.to_vec()),
+        None => (std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into()), Vec::new()),
+    };
+    let status = std::process::Command::new(&prog)
+        .args(&rest)
+        .current_dir(&cwd)
+        .envs(env)
+        .status()
+        .with_context(|| prog.clone())?;
+    rt.shutdown_background();
+    prep.say_fetched();
+    drop(prep);
+    if !status.success() && !cmd.is_empty() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
 }
 
 /// odi exec: runs one of a file's processes (or a part's), its input and
@@ -659,6 +811,7 @@ fn exec(src: &str, part: Option<&str>, pick: Pick, extra: &[String], f: &flags::
         envs: f.all("e").to_vec(),
         path_runtime: f.bool("use-path-runtime"),
         trust: f.all("trust").to_vec(),
+        shell: false,
     };
     let (rd, remote) = crate::hub::open_any(src)?;
     crate::keys::check_trusted(&rd, f.all("trust"))?;
@@ -1297,13 +1450,35 @@ pub fn unpack_cached(rd: &Reader, key: &str) -> Result<PathBuf> {
         let _ = fs::remove_dir_all(&tmp);
         return Err(e);
     }
+    // (On disk before it's marked done: a machine that loses power, or a
+    // microVM killed, must not come back to files marked done but empty.)
+    sync_tree(&tmp);
     fs::write(tmp.join(".complete"), b"")?;
+    sync_tree(&tmp);
     let _ = fs::remove_dir_all(&root);
     if let Err(e) = fs::rename(&tmp, &root) {
         let _ = fs::remove_dir_all(&tmp);
         return Err(e.into());
     }
     Ok(root)
+}
+
+/// Writes what's waiting to be written under dir to its disk.
+pub fn sync_tree(dir: &Path) {
+    #[cfg(target_os = "linux")]
+    if let Ok(d) = fs::File::open(dir) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: syncfs(2) takes an open descriptor and touches no memory.
+        unsafe {
+            libc::syncfs(d.as_raw_fd());
+        }
+        return;
+    }
+    let _ = dir;
+    // SAFETY: sync(2) takes nothing and touches no memory.
+    unsafe {
+        libc::sync();
+    }
 }
 
 fn free_port() -> Result<u16> {
@@ -1325,6 +1500,9 @@ pub struct Site {
 pub struct Web {
     pub port: u16,
     pub client: Client<HttpConnector, Incoming>,
+    /// In odi shell, where the app is started by hand: what a request
+    /// answered before it's up says (and nothing is logged).
+    pub not_up: Option<String>,
 }
 
 fn text(status: StatusCode, s: &'static str) -> Response<Body> {
@@ -1487,6 +1665,13 @@ async fn proxy(web: &Web, mut req: Request<Incoming>, peer: SocketAddr) -> Respo
         parts.headers.insert("x-forwarded-for", v);
     }
     match web.client.request(Request::from_parts(parts, body)).await {
+        Err(_) if web.not_up.is_some() => {
+            let msg = web.not_up.clone().unwrap_or_default();
+            let mut r = Response::new(Full::new(Bytes::from(msg)).map_err(|e| match e {}).boxed_unsync());
+            *r.status_mut() = StatusCode::BAD_GATEWAY;
+            r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"));
+            r
+        }
         Err(e) => {
             // (At most a line a second: a client asking before web is up would
             // otherwise fill the log.)

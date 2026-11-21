@@ -32,6 +32,9 @@ impl Reads {
 /// A mounted file; dropping it unmounts it.
 pub struct Mounted {
     pub dir: PathBuf,
+    /// Whether dir was made for it (and goes when it's unmounted).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    own: bool,
     reads: Option<Arc<Mutex<Reads>>>,
     #[cfg(target_os = "linux")]
     session: Option<fuser::BackgroundSession>,
@@ -57,13 +60,18 @@ pub fn mount_lazy(
     anyhow::bail!("reading on demand is on Linux for now")
 }
 
+/// As mount_lazy, at dir (an empty folder, kept when unmounted): for `cd`
+/// into a file (odi open).
 #[cfg(target_os = "linux")]
-pub use linux::mount_lazy;
+pub use linux::{mount_at, mount_lazy};
 
 #[cfg(target_os = "linux")]
 impl Drop for Mounted {
     fn drop(&mut self) {
         drop(self.session.take());
+        if !self.own {
+            return;
+        }
         for _ in 0..20 {
             if std::fs::remove_dir(&self.dir).is_ok() {
                 return;
@@ -437,6 +445,26 @@ mod linux {
         record: bool,
         warm: Vec<(usize, usize)>,
     ) -> Result<Mounted> {
+        mount(rd, scratch, prefetch, record, warm, None)
+    }
+
+    pub fn mount_at(
+        rd: Arc<Reader>,
+        scratch: &Path,
+        prefetch: Option<Arc<dyn Prefetch>>,
+        dir: &Path,
+    ) -> Result<Mounted> {
+        mount(rd, scratch, prefetch, false, Vec::new(), Some(dir))
+    }
+
+    fn mount(
+        rd: Arc<Reader>,
+        scratch: &Path,
+        prefetch: Option<Arc<dyn Prefetch>>,
+        record: bool,
+        warm: Vec<(usize, usize)>,
+        at: Option<&Path>,
+    ) -> Result<Mounted> {
         if !Path::new("/dev/fuse").exists() {
             bail!("no /dev/fuse here");
         }
@@ -446,7 +474,10 @@ mod linux {
         if !on_path("fusermount3") && !on_path("fusermount") {
             bail!("no fusermount here (the fuse3 package)");
         }
-        let dir = tempfile::Builder::new().prefix("odi-mount-").tempdir()?.keep();
+        let (dir, own) = match at {
+            Some(d) => (d.to_path_buf(), false),
+            None => (tempfile::Builder::new().prefix("odi-mount-").tempdir()?.keep(), true),
+        };
         let reads = record.then(|| Arc::new(Mutex::new(Reads::default())));
         let (cache, pool) = (Cache::default(), Pool::new(WORKERS));
         // (Chunks the program will read first, (entry, chunk), decompressed
@@ -460,9 +491,11 @@ mod linux {
         let fs = OdiFs { nodes: tree(&rd, scratch), rd, cache, pool, prefetch, reads: reads.clone() };
         let opts = [MountOption::RO, MountOption::FSName("odi".into()), MountOption::Subtype("odi".into())];
         match fuser::spawn_mount2(fs, &dir, &opts) {
-            Ok(s) => Ok(Mounted { dir, reads, session: Some(s) }),
+            Ok(s) => Ok(Mounted { dir, own, reads, session: Some(s) }),
             Err(e) => {
-                let _ = std::fs::remove_dir(&dir);
+                if own {
+                    let _ = std::fs::remove_dir(&dir);
+                }
                 Err(e.into())
             }
         }

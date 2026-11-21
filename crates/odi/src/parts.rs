@@ -667,10 +667,34 @@ fn host_node_version() -> Result<String> {
     Ok(v)
 }
 
+/// An exact Node.js version for one that may not be: "22.23.3" as it is;
+/// "22", "22.4", "^22", ">=20": the newest release in that line, from
+/// nodejs.org's list; "" the newest long-term-support release.
+pub fn node_exact(v: &str) -> Result<String> {
+    let v = v.trim().trim_start_matches(['^', '~', '>', '=', 'v', ' ']);
+    let v: String = v.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    let v = v.trim_end_matches('.');
+    if v.split('.').count() == 3 && v.split('.').all(|x| !x.is_empty()) {
+        return Ok(v.to_string());
+    }
+    let base = std::env::var("ODI_NODE_MIRROR").unwrap_or_else(|_| "https://nodejs.org/dist".into());
+    let url = format!("{base}/index.json");
+    let res = ureq::get(&url).call().with_context(|| url.clone())?;
+    let list: Vec<serde_json::Value> =
+        serde_json::from_reader(res.into_reader().take(16 << 20)).context("nodejs.org's list of releases")?;
+    let found = list.iter().find_map(|r| {
+        let ver = r.get("version")?.as_str()?.trim_start_matches('v');
+        let lts = r.get("lts").is_some_and(|l| !l.is_boolean());
+        let fits = if v.is_empty() { lts } else { ver.starts_with(&format!("{v}.")) };
+        fits.then(|| ver.to_string())
+    });
+    found.ok_or_else(|| anyhow!("no Node.js release {v} on {base}"))
+}
+
 /// Node's own release for a platform, from nodejs.org, checked against its
 /// published SHA-256, laid out in dir as a runtime (bin/, lib/). The same
 /// release makes the same part, with the same digest, wherever it's made.
-fn node_release(v: &str, plat: &str, dir: &Path) -> Result<()> {
+pub fn node_release(v: &str, plat: &str, dir: &Path) -> Result<()> {
     let Some((os, arch)) = plat.split_once('/') else { bail!("--platform: OS/ARCH") };
     let arch = match arch {
         "amd64" => "x64",

@@ -18,7 +18,15 @@ odi() { "$ODI" "$@"; }
 
 odi login --token secret >/dev/null
 mkdir "$W/site" && cd "$W/site"
-git init -q && echo '<h1>one</h1>' > index.html && echo '{"repo": "acme/site"}' > odi.json
+git init -q && echo '<h1>one</h1>' > index.html
+
+step "odi.json: required, written by odi init, checked"
+{ odi build -o x.odi 2>&1 || true; } | grep "odi init writes one" >/dev/null || fail "no odi.json: says odi init"
+odi init >/dev/null && grep '"type": "static"' odi.json >/dev/null || fail "odi init: a static site"
+{ odi init 2>&1 || true; } | grep "has one already" >/dev/null || fail "odi init twice"
+echo '{"name": "site", "type": "static", "repo": "acme/site", "includ_runtime": true}' > odi.json
+{ odi build -o x.odi 2>&1 || true; } | grep 'did you mean "include_runtime"' >/dev/null || fail "a misspelled key"
+echo '{"name": "site", "type": "static", "repo": "acme/site"}' > odi.json
 git add . && git commit -qm one && git tag v1.0.0
 
 step "build: the version comes from the git tag"
@@ -74,5 +82,24 @@ odi search | grep "no public repositories" >/dev/null || fail "nothing public ye
 cd "$W/site" && odi push acme/site:1.0.2 site.odi --public --no-latest >/dev/null && cd "$W"
 odi search site | grep "acme/site" >/dev/null || fail "search"
 odi repos | grep "acme/site  public" >/dev/null || fail "repos"
+
+step "step inside: odi shell"
+odi shell acme/site:1.0.2 -- cat static/index.html | grep "three" >/dev/null || fail "shell"
+odi shell acme/site:1.0.2 static -- ls | grep "index.html" >/dev/null || fail "shell in a folder"
+
+step "cd into it: odi init, odi open, odi close"
+PATH="$(dirname "$ODI"):$PATH"   # (the cd it prints runs the odi command itself)
+odi hook bash | grep "builtin cd" >/dev/null || fail "hook"
+( eval "$(odi hook bash)"; cd acme/site:1.0.2/static && grep three index.html >/dev/null ) || fail "cd a hub name"
+( eval "$(odi hook bash)"; cd "$W/site/site.odi" && ls static/index.html >/dev/null ) || fail "cd a file"
+odi close | grep "closed" >/dev/null || fail "close"
+
+step "bundle: one executable, no odi needed to run it"
+cd "$W" && odi bundle "$W/site/site.odi" -o "$W/site-app" --runner "$ODI" >/dev/null
+"$W/site-app" --port 8396 >/dev/null 2>&1 & APP=$!
+for _ in $(seq 50); do curl -s localhost:8396/ >/dev/null && break; sleep 0.1; done
+curl -s localhost:8396/ | grep "three" >/dev/null || fail "bundle serves"
+kill $APP
+"$W/site-app" --odi-file "$W/back.odi" 2>/dev/null && cmp -s "$W/back.odi" "$W/site/site.odi" || fail "bundle: the same file back"
 
 echo; echo "hub workflow: ok"

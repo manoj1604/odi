@@ -19,6 +19,8 @@ fn project(stage: &Path, os: &str, arch: &str) -> Project {
         goos: os.into(),
         goarch: arch.into(),
         build: false,
+        odi_static: false,
+        file: crate::odijson::OdiJson::new("t", crate::odijson::Kind::Node),
         m: Manifest::default(),
     }
 }

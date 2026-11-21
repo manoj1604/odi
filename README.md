@@ -21,8 +21,9 @@ file runs on your laptop, a server, in CI or in a browser tab, exactly
 the same, with nothing to convert or rebuild.
 
 ```sh
+odi init               # writes odi.json: what the project is
 odi build              # my-app/  ->  my-app.odi
-odi run my-app.odi     # runs it on http://localhost:8080
+odi run my-app.odi     # runs it
 ```
 
 Works with **Go, Node.js, Next.js, Python and static sites**, using each
@@ -41,6 +42,7 @@ For Linux and macOS (x86_64 and arm64). Or, with Rust installed:
 
 ```sh
 cd my-app
+odi init                   # write its odi.json (name, type, runtime)
 odi build                  # build it into my-app.odi
 odi inspect my-app.odi     # see what's inside
 odi run my-app.odi         # run it
@@ -58,40 +60,40 @@ odi run you/my-app:1       # run the newest 1.x anywhere
 
 - 📦 **One file.** Your whole build in one file with one checksum, the
   same from laptop to production.
-- ⚡ **Fast starts.** On Linux, a program can start before the whole file has
-  downloaded, because only what it reads first is fetched.
 - 🔁 **Same input, same file.** The same commit always builds to the same
   file, byte for byte.
-- 🔐 **Signed.** `odi sign` signs a file, and you can refuse to run anything
-  you didn't sign.
 - 🏷️ **Versions that make sense.** Publish `1.4.2`, run `:1.4` to get the
-  newest patch, and roll back with one command.
-- 🤖 **Tools for AI agents.** `odi mcp you/tool:1` runs a packaged tool as
-  an MCP server.
-- 🎮 **Browser apps and games.** `odi web game.odi` plays a WebAssembly or
-  WebGPU game straight from the file, even offline.
+  newest patch.
+- 📂 **Look inside with `cd`.** `cd app.odi`, then `ls` and `cat` as usual.
+- 🚀 **Runs where odi isn't installed.** `odi bundle` makes one executable
+  for a VM, a microVM or a server.
+- ⚡ **Fast starts.** On Linux, a program run from the hub starts before the
+  whole file has downloaded.
 
-## Common commands
+## Commands
 
 | You want to… | Run |
 |---|---|
-| Build this project | `odi build` |
-| Run a file | `odi run app.odi` |
+| Set up a project | `odi init` (writes [odi.json](docs/odi-json.md)) |
+| Build it | `odi build` |
+| Run it | `odi run app.odi` |
 | See what's inside | `odi inspect app.odi` |
-| Run a command-line tool | `odi exec tool.odi -- ARGS` |
-| Publish a version | `odi push you/app:1.0.0` |
+| `cd` into it | `cd app.odi` (once: `eval "$(odi hook zsh)"` in `~/.zshrc`) |
+| Run it where odi isn't installed | `odi bundle app.odi -o app`, then `./app` |
+| Publish a version | `odi login`, then `odi push you/app:1.0.0` |
 | Publish the next patch | `odi push --bump patch` |
+| Run it from the hub | `odi run you/app:1` |
 | List versions | `odi versions you/app` |
-| Roll back | `odi tag you/app:1.0.0 latest` |
-| Open in a browser | `odi web game.odi` |
 | Get help | `odi help` or `odi help COMMAND` |
+
+That's all most people need. More is in the works (parts and shared
+runtimes, tools for AI agents, browser games, signing): `odi help --all`
+lists those experimental commands, and [TODO.md](TODO.md) what's planned.
 
 ## Learn more
 
 - **[Getting started](docs/getting-started.md)**: a short walkthrough.
-- **[Publishing on the hub](docs/hub.md)**: versions, ranges, rollbacks and CI.
-- **[All docs](docs/README.md)**: sets, AI agents, browser games, signing,
-  configuration.
+- **[Publishing on the hub](docs/hub.md)**: versions, ranges and CI.
 - **[Command reference](docs/cli.md)**: every command and flag.
 
 ## Status

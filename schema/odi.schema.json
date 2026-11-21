@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/manoj1604/odi/main/schema/odi.schema.json",
+  "title": "odi.json",
+  "description": "A project's build settings for odi build. Specification: docs/odi-json.md",
+  "type": "object",
+  "required": ["name", "type"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": {
+      "description": "The app's name.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "type": {
+      "description": "What kind of project.",
+      "enum": ["go", "node", "nextjs", "python", "static"]
+    },
+    "version": { "description": "The build's version, such as 1.4.2.", "type": "string", "minLength": 1 },
+    "repo": {
+      "description": "Where odi push publishes: namespace/name.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$"
+    },
+    "runtime": {
+      "description": "The runtime and its version: \"node 22\".",
+      "type": "string",
+      "pattern": "^(node|python)( v?[0-9]+(\\.[0-9]+){0,2})?$"
+    },
+    "include_runtime": { "description": "Put the runtime itself in the file.", "type": "boolean" },
+    "build": { "description": "The build command (\"\": none).", "type": "string" },
+    "start": { "description": "The command that starts the app.", "type": "string", "minLength": 1 },
+    "port": { "description": "The port the app listens on.", "type": "integer", "minimum": 1, "maximum": 65535 },
+    "static": { "description": "static projects: the folder to serve.", "type": "string", "minLength": 1 },
+    "env": {
+      "description": "Environment variables: a default value, or \"required\" or \"optional\".",
+      "type": "object",
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
+    "manifest": { "description": "Raw manifest fields (SPEC.md section 5).", "type": "object" }
+  }
+}
