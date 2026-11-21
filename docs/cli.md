@@ -183,15 +183,17 @@ odi hook: Set up cd into .odi files: cd app.odi (add its line to your shell)
 Usage:
   odi hook zsh|bash|fish
 
-Add it to your shell's startup file:
-  zsh:  eval "$(odi hook zsh)"    (in ~/.zshrc)
-  bash: eval "$(odi hook bash)"   (in ~/.bashrc)
-  fish: odi hook fish | source       (in ~/.config/fish/config.fish)
+Add one line to your shell's startup file (it does nothing if odi is removed
+later):
+  zsh  (~/.zshrc):   command -v odi >/dev/null && eval "$(odi hook zsh)"
+  bash (~/.bashrc):  command -v odi >/dev/null && eval "$(odi hook bash)"
+  fish (config.fish): command -q odi; and odi hook fish | source
 Then cd app.odi, cd app.odi/app or cd acme/web:1.4 (a hub name with a tag)
-goes inside, read-only, and ls, cat and the rest work as usual. On Linux the
-file is mounted and read as you look (FUSE); elsewhere it's unpacked once
-under ~/.odi/open. odi close lets them go. A cd to a folder works as it always
-did.
+goes inside, read-only, and ls, cat and the rest work as usual; cd .. at its
+top comes back out to the folder the file is in. Tab after cd offers .odi
+files. On Linux the file is mounted and read as you look (FUSE); elsewhere
+it's unpacked once under ~/.odi/open. odi close lets them go. Any other cd is
+the shell's own, unchanged.
 
 Examples:
   odi hook zsh

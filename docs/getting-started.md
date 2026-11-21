@@ -87,8 +87,16 @@ odi inspect shop.odi      # its processes, runtime, size and digest
 Or `cd` into it. Add one line to your shell's startup file, once:
 
 ```sh
-eval "$(odi hook zsh)"     # in ~/.zshrc  (bash: odi hook bash in ~/.bashrc; fish: odi hook fish | source)
+# ~/.zshrc
+command -v odi >/dev/null && eval "$(odi hook zsh)"
+# ~/.bashrc
+command -v odi >/dev/null && eval "$(odi hook bash)"
+# ~/.config/fish/config.fish
+command -q odi; and odi hook fish | source
 ```
+
+(The `command -v odi` part means a new terminal still starts fine if you
+remove odi one day.) Open a new terminal, or `source ~/.zshrc`.
 
 Then an ODI file is a folder you can `cd` into:
 
@@ -101,9 +109,11 @@ cd acme/shop:1.0           # a name on the hub too (with a tag)
 odi close                  # let them go when you're done
 ```
 
-It's read-only. On Linux the file is mounted and read as you look; on
-macOS it's unpacked once (into `~/.odi/open`). A `cd` to a normal folder
-works exactly as before. Inside, you can start the app yourself too:
+It's read-only. `cd ..` at its top comes back out to the folder the file is
+in, and tab after `cd` offers `.odi` files. On Linux the file is mounted and
+read as you look; on macOS it's unpacked once (into `~/.odi/open`), and
+`cd` into it again is instant. Any other `cd` is your shell's own, exactly
+as before. Inside, you can start the app yourself too:
 `cd shop.odi/app && node server.js`.
 
 ## Publish

@@ -78,7 +78,7 @@ odi run you/my-app:1       # run the newest 1.x anywhere
 | Build it | `odi build` |
 | Run it | `odi run app.odi` |
 | See what's inside | `odi inspect app.odi` |
-| `cd` into it | `cd app.odi` (once: `eval "$(odi hook zsh)"` in `~/.zshrc`) |
+| `cd` into it | `cd app.odi` (once, in `~/.zshrc`: see [getting started](docs/getting-started.md#look-inside)) |
 | Run it where odi isn't installed | `odi bundle app.odi -o app`, then `./app` |
 | Publish a version | `odi login`, then `odi push you/app:1.0.0` |
 | Publish the next patch | `odi push --bump patch` |

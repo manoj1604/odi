@@ -22,6 +22,15 @@ jobs:
       - run: sh -n install.sh
       # The hub workflow end to end, against the mock hub.
       - run: tests/hub.sh
+      # cd into ODI files in zsh, bash and fish (and, on Linux, through FUSE).
+      - name: shells for the cd test
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq zsh fish fuse3
+          else
+            brew install fish >/dev/null
+          fi
+      - run: tests/cd.sh
       # The browser runner's reader alone: pure Rust (ruzstd), as in a tab.
       - run: cargo test -p odi-web
       - run: cargo clippy -p odi-web --target wasm32-unknown-unknown -- -D warnings

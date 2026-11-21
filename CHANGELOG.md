@@ -4,6 +4,27 @@ All notable changes to odi are listed here. The project follows
 [Semantic Versioning](https://semver.org/); before 1.0, a minor version may
 change commands or the 0.2 draft parts of the format.
 
+## [0.2.1] - 2026-11-21
+
+### cd into ODI files, made solid
+
+- `cd ..` (and `../..`, `../x`) at the top of an opened file comes back out
+  to the folder the file is in (for a hub name, to where `cd` was run),
+  instead of into `~/.odi/open`.
+- Opened files' folders have readable names (`~/.odi/open/shop-3f2a9c1e0b7d`).
+- Two terminals opening one file at once no longer remove the copy one of
+  them is in (macOS).
+- A mount whose odi was stopped (Linux: "transport endpoint is not
+  connected") is mounted again on the next `cd`; `odi close` lets it go.
+- Only `namespace/name:tag` is taken as a hub name: any other path with a
+  `:` is the shell's own `cd`, with no network. A missing file says which
+  folder it looked in. Reaching a registry gives up after 10 seconds.
+- Tab after `cd` offers `.odi` files (zsh, bash, fish).
+- The startup line is `command -v odi >/dev/null && eval "$(odi hook zsh)"`,
+  so removing odi never breaks a terminal; `odi hook` with no shell prints it.
+- tests/cd.sh: all of the above in zsh, bash and fish, on Linux (with FUSE)
+  and macOS, in CI.
+
 ## [0.2.0] - 2026-11-21
 
 ### A small core

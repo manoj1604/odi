@@ -189,7 +189,10 @@ pub fn new_client(r: &Ref) -> Client {
     if org.is_empty() && token == ody_token {
         org = ody_org;
     }
+    // (A registry that doesn't answer is said so in seconds, not minutes;
+    // a big transfer still has five.)
     let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
         .timeout(Duration::from_secs(300))
         .user_agent(&format!("odi/{}", crate::VERSION))
         .build();
