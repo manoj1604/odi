@@ -9,13 +9,16 @@ versions, pull, compare and roll back.
 ## Once: sign in and link the project
 
 ```sh
-odi login                 # paste an API key
+odi login                 # opens the website: sign in (or sign up), then Allow
 ```
 
-Make the key in your account's dashboard, under
-[API keys](https://dev.odisssi.com/dashboard#keys) (no account yet?
-[sign up](https://dev.odisssi.com/signup) first). On another registry,
-use the token it gives you: `odi login --registry URL`.
+`odi login` opens the website in your browser. Sign in, or sign up if
+you're new, and allow your computer; odi keeps a token of its own. Browse
+what's published at [hub.odisssi.com](https://hub.odisssi.com). On a
+machine with no browser (a server, CI), use an API key from
+[your dashboard](https://dev.odisssi.com/dashboard#keys):
+`odi login --token KEY`, or `ODI_TOKEN`. Another registry takes the token it
+gives you: `odi login --registry URL --token TOKEN`.
 
 Name the repository in the project's `odi.json`, so commands run in the
 project don't need it:

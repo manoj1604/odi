@@ -80,10 +80,10 @@ odi run you/my-app:1       # run the newest 1.x anywhere
 | See what's inside | `odi inspect app.odi` |
 | `cd` into it | `cd app.odi` (once, in `~/.zshrc`: see [getting started](docs/getting-started.md#look-inside)) |
 | Run it where odi isn't installed | `odi bundle app.odi -o app`, then `./app` |
-| Publish a version | `odi login`, then `odi push you/app:1.0.0` |
+| Publish a version | `odi login` (signs in on the website), then `odi push you/app:1.0.0` |
 | Publish the next patch | `odi push --bump patch` |
 | Run it from the hub | `odi run you/app:1` |
-| List versions | `odi versions you/app` |
+| List versions | `odi versions you/app`, or browse [hub.odisssi.com](https://hub.odisssi.com) |
 | Get help | `odi help` or `odi help COMMAND` |
 
 That's all most people need. More is in the works (parts and shared

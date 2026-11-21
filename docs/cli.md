@@ -19,7 +19,7 @@ Look inside:
   close        Let go of the files cd went into
 
 Publish on the hub:
-  login        Sign in to a registry
+  login        Sign in to the hub, in your browser
   push         Publish a version (one build per platform), and move latest to it
   pull         Download a file (this machine's platform), checked against its digest
   versions     List a repository's versions and tags: platforms, size, when
@@ -215,13 +215,16 @@ Examples:
 ## odi login
 
 ```
-odi login: Sign in to a registry
+odi login: Sign in to the hub, in your browser
 
 Usage:
   odi login [flags]
 
-Without --token, asks for one. The default registry is hub.odisssi.com;
---registry (or $ODI_REGISTRY) names another.
+Opens the website in your browser: sign in there (or sign up if you're new)
+and allow this computer; odi gets a token of its own. With no browser on this
+machine (a server, CI): --token, or ODI_TOKEN, with an API key from your
+dashboard. The hub is hub.odisssi.com; --registry (or $ODI_REGISTRY) names
+another, which takes a token.
 
 Flags:
   --token TOKEN   an account token, or an organization's API key
@@ -230,6 +233,7 @@ Flags:
 
 Examples:
   odi login
+  odi login --token $ODI_KEY
   odi login --registry https://registry.example.com --token $TOKEN
 ```
 

@@ -119,7 +119,7 @@ as before. Inside, you can start the app yourself too:
 ## Publish
 
 ```sh
-odi login                       # paste an API key: dev.odisssi.com/dashboard#keys
+odi login                       # opens the website: sign in, or sign up
 odi push acme/shop:1.0.0        # only what the hub doesn't have is sent
 odi push acme/shop --bump patch # later: 1.0.1, and latest moves to it
 odi versions acme/shop          # what's published
@@ -127,6 +127,7 @@ odi run acme/shop:1.0           # the newest 1.0.x, from anywhere
 odi pull acme/shop:1.0          # or download the file, checked
 ```
 
+Everything published is at [hub.odisssi.com](https://hub.odisssi.com).
 On Linux, `odi run acme/shop:1.0` starts the app before the whole file has
 downloaded: it's read as the app asks for it. More in
 [publishing on the hub](hub.md): versions, ranges and CI.

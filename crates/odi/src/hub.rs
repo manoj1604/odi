@@ -24,7 +24,10 @@ use crate::flags::{self, flag, Kind::*};
 use crate::{host_arch, host_os, human};
 
 const DEFAULT_REGISTRY: &str = "https://hub.odisssi.com";
-/// Where the hub's API keys are made.
+/// Where the hub's accounts are: odi login signs in there, in a browser
+/// ($ODI_ACCOUNTS for another).
+const ACCOUNTS_URL: &str = "https://dev.odisssi.com/api/accounts";
+/// Where the hub's API keys are made (for CI).
 const KEYS_URL: &str = "https://dev.odisssi.com/dashboard#keys";
 
 /// The largest README a repository's page shows.
@@ -306,11 +309,12 @@ pub fn cmd_login(args: &[String]) -> Result<()> {
         println!("Using ody's sign-in.");
         return Ok(());
     }
-    if token.is_empty() {
-        let hub = c.registry.is_empty() || c.registry.trim_end_matches('/') == DEFAULT_REGISTRY;
-        if hub && std::io::IsTerminal::is_terminal(&io::stdin()) {
-            eprintln!("Paste an API key from {KEYS_URL} (no account yet? sign up there first).");
-        }
+    let hub = c.registry.is_empty() || c.registry.trim_end_matches('/') == DEFAULT_REGISTRY;
+    if token.is_empty() && (hub || std::env::var_os("ODI_ACCOUNTS").is_some()) {
+        // (The hub: sign in, or sign up, on the website; it hands this
+        // machine a token. --token and ODI_TOKEN are for CI.)
+        token = browser_sign_in()?;
+    } else if token.is_empty() {
         token = ask_token()?;
     }
     if token.is_empty() {
@@ -320,6 +324,115 @@ pub fn cmd_login(args: &[String]) -> Result<()> {
     save_config(&c)?;
     println!("Signed in.");
     Ok(())
+}
+
+/// Signs in on the website, in a browser: odi waits on this machine
+/// (127.0.0.1, a port of its own) for the page to hand it a one-time code,
+/// then swaps the code, with the secret only it knows (PKCE), for an
+/// account token.
+fn browser_sign_in() -> Result<String> {
+    use std::io::{BufRead, BufReader};
+    use std::net::TcpListener;
+    let accounts = std::env::var("ODI_ACCOUNTS").unwrap_or_else(|_| ACCOUNTS_URL.into());
+    let accounts = accounts.trim_end_matches('/');
+    let random = |n: usize| -> Result<String> {
+        let mut b = vec![0u8; n];
+        getrandom::getrandom(&mut b).map_err(|e| anyhow!("no randomness here: {e}"))?;
+        Ok(hex::encode(b))
+    };
+    let (verifier, state) = (random(32)?, random(16)?);
+    let challenge = hex::encode(Sha256::digest(verifier.as_bytes()));
+    let listener = TcpListener::bind("127.0.0.1:0").context("waiting for the browser (127.0.0.1)")?;
+    let port = listener.local_addr()?.port();
+    let host = std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().split('.').next().unwrap_or("").to_string())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "this computer".into());
+    let mut link = url::Url::parse(&format!("{accounts}/cli"))?;
+    link.query_pairs_mut()
+        .append_pair("port", &port.to_string())
+        .append_pair("state", &state)
+        .append_pair("challenge", &challenge)
+        .append_pair("name", &format!("odi on {host}"));
+    eprintln!("Sign in (or sign up) in your browser:\n  {link}");
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    // (ODI_BROWSER=none: only print the link, for a machine with no browser.)
+    let opener = if std::env::var("ODI_BROWSER").is_ok_and(|b| b == "none") { "true" } else { opener };
+    let _ = std::process::Command::new(opener)
+        .arg(link.as_str())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    eprintln!("Waiting for the browser… (Ctrl-C to stop; with no browser here: odi login --token, an API key from {KEYS_URL})");
+
+    listener.set_nonblocking(true)?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(600);
+    let code = loop {
+        if std::time::Instant::now() > deadline {
+            bail!("no answer from the browser in 10 minutes: odi login again");
+        }
+        let (mut conn, _) = match listener.accept() {
+            Ok(c) => c,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        };
+        conn.set_nonblocking(false)?;
+        conn.set_read_timeout(Some(Duration::from_secs(10)))?;
+        let mut line = String::new();
+        BufReader::new(&conn).read_line(&mut line)?;
+        let target = line.split_whitespace().nth(1).unwrap_or("");
+        let u = url::Url::parse(&format!("http://127.0.0.1{target}"))?;
+        let get = |k: &str| u.query_pairs().find(|(q, _)| q == k).map(|(_, v)| v.to_string()).unwrap_or_default();
+        let answer = |conn: &mut std::net::TcpStream, msg: &str| {
+            let body = format!("<!doctype html><meta charset=utf-8><title>odi</title><body style=\"font-family:system-ui;margin:20vh auto;max-width:28em;text-align:center\"><h2>{msg}</h2><p>You can close this tab.</p>");
+            let _ = write!(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        };
+        if u.path() != "/done" || get("state") != state {
+            answer(&mut conn, "This isn't the sign-in odi is waiting for.");
+            continue;
+        }
+        if !get("error").is_empty() {
+            answer(&mut conn, "Not signed in.");
+            bail!("the sign-in was cancelled in the browser");
+        }
+        let code = get("code");
+        if code.is_empty() {
+            answer(&mut conn, "No code came back: try odi login again.");
+            bail!("the browser sent no code back");
+        }
+        answer(&mut conn, "odi is signed in.");
+        break code;
+    };
+    let res = ureq::post(&format!("{accounts}/v1/cli/token"))
+        .timeout(Duration::from_secs(30))
+        .set("content-type", "application/json")
+        .send_string(&json!({ "code": code, "verifier": verifier }).to_string());
+    let read = |r: ureq::Response| -> Value {
+        let mut b = String::new();
+        let _ = r.into_reader().take(1 << 20).read_to_string(&mut b);
+        serde_json::from_str(&b).unwrap_or(Value::Null)
+    };
+    let body: Value = match res {
+        Ok(r) => read(r),
+        Err(ureq::Error::Status(_, r)) => {
+            let msg = read(r)["error"].as_str().unwrap_or("refused").to_string();
+            bail!("signing in: {msg}");
+        }
+        Err(e) => bail!("signing in: {e}"),
+    };
+    let token = body["token"].as_str().unwrap_or_default().to_string();
+    if token.is_empty() {
+        bail!("signing in: no token came back");
+    }
+    if let Some(email) = body["account"]["email"].as_str() {
+        eprintln!("Signed in as {email}.");
+    }
+    Ok(token)
 }
 
 /// A token typed at the terminal, not shown; nothing when not at one.

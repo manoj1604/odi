@@ -297,10 +297,12 @@ pub const COMMANDS: &[Command] = &[
         "login",
         "Registry",
         &["login [flags]"],
-        "Sign in to a registry",
-        "Without --token, asks for one. The default registry is hub.odisssi.com; \
-         --registry (or $ODI_REGISTRY) names another.",
-        &["odi login", "odi login --registry https://registry.example.com --token $TOKEN"],
+        "Sign in to the hub, in your browser",
+        "Opens the website in your browser: sign in there (or sign up if you're new) and allow \
+         this computer; odi gets a token of its own. With no browser on this machine (a server, \
+         CI): --token, or ODI_TOKEN, with an API key from your dashboard. The hub is \
+         hub.odisssi.com; --registry (or $ODI_REGISTRY) names another, which takes a token.",
+        &["odi login", "odi login --token $ODI_KEY", "odi login --registry https://registry.example.com --token $TOKEN"],
         true,
     ),
     c("logout", "Registry", &["logout"], "Forget the registry sign-in", "", &["odi logout"], false),

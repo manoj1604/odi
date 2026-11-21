@@ -4,6 +4,15 @@ All notable changes to odi are listed here. The project follows
 [Semantic Versioning](https://semver.org/); before 1.0, a minor version may
 change commands or the 0.2 draft parts of the format.
 
+## [0.2.2] - 2026-11-21
+
+- `odi login` signs in on the website, in your browser: sign in (or sign up)
+  and allow the computer; odi gets an account token of its own (PKCE: the
+  code the page hands back is useless without odi's secret). No API key to
+  copy. `--token` and `ODI_TOKEN` (an API key from the dashboard) stay, for
+  machines with no browser and CI. `ODI_BROWSER=none` only prints the link.
+- The hub's pages are at hub.odisssi.com.
+
 ## [0.2.1] - 2026-11-21
 
 ### cd into ODI files, made solid
