@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "odi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "odi-format"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "odi-web"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hex",
  "odi-format",

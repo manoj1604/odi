@@ -4,7 +4,7 @@ All notable changes to odi are listed here. The project follows
 [Semantic Versioning](https://semver.org/); before 1.0, a minor version may
 change commands or the 0.2 draft parts of the format.
 
-## [Unreleased]
+## [0.2.0] - 2026-11-21
 
 ### A small core
 
